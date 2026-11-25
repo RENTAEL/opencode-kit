@@ -1,0 +1,33 @@
+{
+  "id": "po_index",
+  "type": "po-index",
+  "summary": "Product Owner documentation overview: what this view covers and the reader question each PO document answers",
+  "contract_file": "content/product/contracts/po-index.md",
+  "path": "docs/product/product-owner/README.md",
+  "group": "product",
+  "selection": {
+    "mode": "static",
+    "min_tier": "spine",
+    "selectors": {
+      "audiences": [
+        "product-owners"
+      ]
+    },
+    "condition": null
+  },
+  "instruction_file": "content/shared/folder-index.instruction.md",
+  "requires": [
+    "code_graph"
+  ],
+  "target_depth": "orientation",
+  "answer_shape": "router",
+  "write_order": 47,
+  "provenance_mode": "sections",
+  "audit_profile": "router",
+  "dominant_form": null,
+  "template_file": "content/product/templates/po-readme.md",
+  "title": "Product Owner documentation",
+  "contract_revision": "3.0.0",
+  "compact_group": "po_compact",
+  "compact_order": 11
+}

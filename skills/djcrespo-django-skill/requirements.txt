@@ -1,0 +1,12 @@
+# Django Dev Pro Skill Requirements
+# The skill runtime only needs the Python standard library.
+# Django and DRF are required by the generated code and test commands,
+# so they are kept uncommented as the minimum project dependencies.
+
+django>=5.0
+djangorestframework>=3.14
+
+# Optional: formatting / linting tools
+# black>=23.0
+# isort>=5.0
+# flake8>=6.0

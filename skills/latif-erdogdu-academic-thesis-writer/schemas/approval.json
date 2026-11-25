@@ -1,0 +1,101 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/latif-erdogdu/academic-thesis-writer/schemas/approval.json",
+  "title": "İnsan onay kaydı",
+  "description": "Bir onay kapısının kararını taşıyan nesne. `human_approvals.<kapı>` ya bu nesne ya da geriye uyum için eski `true`/`false` boolean'ıdır. Boolean biçim içerik özeti taşımadığından tazelik denetimi yapılamaz; bu yüzden `approve` komutu daima nesne yazar.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["approved", "revision"],
+  "properties": {
+    "$comment": {
+      "type": "string"
+    },
+    "approved": {
+      "type": "boolean",
+      "description": "İnsan kararının olumlu olup olmadığı. `false` değeri ya kapı hiç açılmamış ya da ret edilmiş demektir; ikisini `rejection_reason` ayırır."
+    },
+    "revision": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Bu kapının kaçıncı onay kararı. Ret ve geri alma sayacı sıfırlamaz."
+    },
+    "approved_by": {
+      "type": ["string", "null"],
+      "maxLength": 120,
+      "description": "Kararı veren insanın adı. Ajan kendi onayını yazamaz. `null` yalnız `approved: false` iken (ret/geri alma) geçerlidir; olumlu kararda hem koda (`onay_ver`) hem aşağıdaki `allOf` dalına göre zorunludur."
+    },
+    "approved_at": {
+      "type": ["string", "null"],
+      "format": "date-time",
+      "description": "Karar anı (RFC 3339)."
+    },
+    "content_hash": {
+      "type": ["string", "null"],
+      "pattern": "^sha256:[0-9a-f]{16}$",
+      "description": "Onay anında kapsanan içeriğin kısaltılmış SHA-256 özeti. İçerik sonradan değişirse onay bayatlar."
+    },
+    "comment": {
+      "type": ["string", "null"],
+      "maxLength": 2000,
+      "description": "Kararı açıklayan serbest not."
+    },
+    "rejection_reason": {
+      "type": ["string", "null"],
+      "maxLength": 2000,
+      "description": "Ret gerekçesi. `onay_reddet` boş gerekçeyi kabul etmez; bu zorunluluk Python tarafındadır, çünkü şema 'hiç açılmamış' ile 'reddedilmiş' durumlarını ayırt edemez."
+    },
+    "audit_refs": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "^AUD-[0-9]{3,}$"
+      },
+      "description": "Kararın dayandığı denetim kayıtlarının kimlikleri."
+    }
+  },
+  "allOf": [
+    {
+      "comment": "OLUMLU kararın üç alanı da bulunmalı ve KİMLİK boş olmamalıdır. `approved_by` yalnız olumlu kararda zorunludur; ret ve geri alma kaydında `null` kalabilir, çünkü kimlik onayla birlikte silinir. Kod tarafındaki karşılığı `tools/atw/approval.py:onay_ver` — şema yalnız YAZILMIŞ kaydı denetler, o kaydı yazan yolu denetlemez.",
+      "if": { "properties": { "approved": { "const": true } }, "required": ["approved"] },
+      "then": {
+        "required": ["approved_by", "approved_at", "content_hash"],
+        "properties": {
+          "approved_by": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "\\S",
+            "description": "Olumlu kararda zorunlu. `\\S` yalnız boşluk içeren adı eler; `onay_ver` de `temizle()` sonrası boş kalan adı reddeder."
+          },
+          "approved_at": {
+            "type": "string",
+            "description": "Olumlu kararda zorunlu: onayın anı bilinmeden kayıt, kararın ne zaman verildiğini söyleyemez."
+          }
+        }
+      }
+    }
+  ],
+  "examples": [
+    {
+      "$comment": "KURGUSAL ORNEK. Gerekçe, kişi ve zaman uydurmadir; yalnizca sema dogrulamak icin kullanilir.",
+      "approved": true,
+      "revision": 1,
+      "approved_by": "Danışma Kurulu Üyesi (kurgusal)",
+      "approved_at": "2026-09-30T09:14:22+00:00",
+      "content_hash": "sha256:0123456789abcdef",
+      "comment": "Taslak incelendi, kapsam uygun.",
+      "rejection_reason": null,
+      "audit_refs": ["AUD-007"]
+    },
+    {
+      "$comment": "Ret kaydi: gerekce zorunludur, cunku 'ne duzeltilmeli' sorusunun cevabidir.",
+      "approved": false,
+      "revision": 2,
+      "approved_by": "Danışma Kurulu Üyesi (kurgusal)",
+      "approved_at": "2026-09-30T11:02:05+00:00",
+      "content_hash": null,
+      "comment": null,
+      "rejection_reason": "Arama kayıtları eksik; arama stratejisi yeniden tanımlansın.",
+      "audit_refs": []
+    }
+  ]
+}

@@ -1,0 +1,30 @@
+{
+  "id": "tech_debt",
+  "type": "tech-debt-register",
+  "summary": "Shortcut, consequence, evidence, remediation direction",
+  "contract_file": "content/architecture/contracts/tech-debt-register.md",
+  "path": "docs/architecture/tech-debt.md",
+  "group": "architecture",
+  "selection": {
+    "mode": "static",
+    "min_tier": "diligence",
+    "selectors": {},
+    "condition": null
+  },
+  "instruction_file": "content/architecture/instructions.md",
+  "requires": [
+    "code_graph",
+    "git_history"
+  ],
+  "target_depth": "deep-dive",
+  "answer_shape": "lookup",
+  "write_order": 14,
+  "nav_order": 32,
+  "provenance_mode": "sections",
+  "audit_profile": "risk",
+  "dominant_form": "table",
+  "contract_revision": "3.0.0",
+  "template_file": "content/architecture/templates/tech-debt.md",
+  "compact_group": "architecture_compact",
+  "compact_order": 6
+}

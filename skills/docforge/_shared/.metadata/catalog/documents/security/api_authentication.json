@@ -1,0 +1,32 @@
+{
+  "id": "api_authentication",
+  "type": "authentication",
+  "summary": "Public surface, inputs/outputs, auth contract, limits, errors, compatibility source",
+  "contract_file": "content/security/contracts/authentication.md",
+  "path": "docs/security/authentication.md",
+  "group": "security",
+  "selection": {
+    "mode": "static",
+    "min_tier": "spine",
+    "selectors": {
+      "shapes": [
+        "api-service"
+      ]
+    },
+    "condition": null
+  },
+  "instruction_file": "content/security/instructions.md",
+  "requires": [
+    "code_graph"
+  ],
+  "target_depth": "deep-dive",
+  "answer_shape": "entry-catalog",
+  "write_order": 79,
+  "provenance_mode": "sections",
+  "audit_profile": "risk",
+  "dominant_form": "table",
+  "contract_revision": "3.0.0",
+  "template_file": "content/security/templates/api-authentication.md",
+  "compact_group": "security_compact",
+  "compact_order": 11
+}

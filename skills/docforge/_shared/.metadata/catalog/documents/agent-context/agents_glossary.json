@@ -1,0 +1,37 @@
+{
+  "id": "agents_glossary",
+  "type": "agents-glossary",
+  "summary": "Self-contained definitions for evidenced domain and flow terms with their code context",
+  "contract_file": "content/agent-context/contracts/agents-glossary.md",
+  "path": "docs/agents/glossary.md",
+  "group": "agent-context",
+  "selection": {
+    "mode": "static",
+    "min_tier": "spine",
+    "selectors": {
+      "audiences": [
+        "coding-agents"
+      ]
+      ,
+      "vendors": []
+    },
+    "condition": null
+  },
+  "instruction_file": "content/agent-context/agents-kernel.instruction.md",
+  "requires": [
+    "flow_graph"
+  ],
+  "target_depth": "reference",
+  "answer_shape": "lookup",
+  "write_order": 209,
+  "provenance_mode": "sections",
+  "audit_profile": "agent-view",
+  "dominant_form": null,
+  "contract_revision": "3.0.0",
+  "presentation": {
+    "related_docs": "none"
+  },
+  "template_file": "content/agent-context/templates/agents-glossary.md",
+  "compact_group": "agents_compact",
+  "compact_order": 7
+}

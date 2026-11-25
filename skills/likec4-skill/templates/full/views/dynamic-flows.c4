@@ -1,0 +1,53 @@
+// views/dynamic-flows.c4 — dynamic scenario + deployment view.
+// Steps go through LEAF elements (api.signin, not the compound api container)
+// so the sequence variant renders cleanly and validate stays warning-free.
+views {
+  dynamic view signInFlow {
+    title 'Scenario - Customer sign in'
+
+    customer -> internetBanking.spa 'enters credentials'
+    internetBanking.spa -> internetBanking.api.signin 'POST /login'
+    internetBanking.api.signin -> internetBanking.api.security 'validates credentials using'
+    internetBanking.api.security -> internetBanking.db 'checks hashed password in'
+    internetBanking.api.security -> internetBanking.api.signin 'returns result to'
+    internetBanking.spa <- internetBanking.api.signin 'returns session token'
+  }
+
+  // Branches, retries and error paths belong INSIDE one flow — not spread
+  // across several views. `variant sequence` renders them as UML frames.
+  dynamic view paymentFlow {
+    variant sequence
+    title 'Scenario - Payment (with failure path)'
+
+    customer -> internetBanking.spa 'submits a payment on'
+    internetBanking.spa -> internetBanking.api.accounts 'POST /payments'
+    internetBanking.api.accounts -> internetBanking.api.security 'authorizes the request with'
+
+    alt 'authorization' {
+      when 'authorized' {
+        loop 'until the mainframe answers' {
+          internetBanking.api.mainframeFacade -> mainframe 'submits the transfer to'
+        }
+        try {
+          internetBanking.api.accounts -> internetBanking.db 'records the payment in'
+        } catch 'write failed' {
+          internetBanking.api.accounts -> internetBanking.api.accounts 'rolls back and retries'
+        }
+        opt 'if the customer opted in' {
+          internetBanking.api.accounts -[async]-> email 'sends a receipt using'
+        }
+      }
+      else 'declined' {
+        internetBanking.spa <- internetBanking.api.accounts 'returns 402 Payment Required'
+      }
+    }
+
+    internetBanking.spa <- internetBanking.api.accounts 'returns the payment status'
+  }
+
+  deployment view prodDeployment {
+    title 'Deployment - Production'
+    include prod.**
+    autoLayout LeftRight
+  }
+}

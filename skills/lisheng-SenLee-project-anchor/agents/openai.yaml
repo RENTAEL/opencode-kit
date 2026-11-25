@@ -1,0 +1,7 @@
+interface:
+  display_name: "Project Anchor"
+  short_description: "Keep long-lived AI-coded projects aligned across specs, implementation, and long-running execution."
+  default_prompt: "Use the project-anchor workflow to assess this repository, apply the lightest governance needed, and keep significant work aligned with authoritative project intent."
+
+policy:
+  allow_implicit_invocation: true

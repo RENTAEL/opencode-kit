@@ -1,0 +1,120 @@
+# Canonical ownership
+
+## Control files
+
+The always-loaded files below are the ones every entrypoint reads. Their
+content is the most duplicated surface in the package, so each rule has
+exactly one owner and every other file links to it.
+
+| File | Owns |
+|---|---|
+| `rules.md` | Safety boundaries, code-graph precondition, provider sufficiency, the untrusted-data boundary, completion requirement |
+| `flags.md` | Every flag's meaning, and the **flag → gate matrix** — the single authoritative list of what `--auto-accept` does not waive |
+| `help.md` | The per-entrypoint `--help` text. Summarizes flags; never redefines one — `flags.md` owns them |
+| `retrieval.md` | The catalog retrieval protocol |
+| `ownership.md` | This file: which file owns which rule |
+
+A flag's effect appears in `flags.md`; a per-entrypoint restatement in
+`help.md` or a `SKILL.md` must link here rather than carry its own wording.
+
+**The one sanctioned exception.** Each `SKILL.md` restates the path-anchoring
+rule, the working-copy override, and the untrusted-data boundary in full
+rather than linking. This is deliberate: they are the rules that keep an
+untrusted working repository from supplying the scripts the skill executes, so
+they must be present in the file a host loads on its own, before any cartridge
+link is followed. `tests/test_structure.py` enforces their presence in every
+entrypoint. Do not collapse them into links.
+
+## Policy and content owners
+
+- [`references/docs-tree.md`](references/docs-tree.md): paths, naming, tiers,
+  placement.
+- [`content/README.md`](content/README.md): the universal contract,
+  typed-profile behavior, and boundaries across the content tree; risk-register
+  routing points to `content/fact-map.md`.
+- `content/<group>/contracts/` (or `<group>/<id>.contract.md` for small
+  groups): per-document-type reader question, mode, depth, shape,
+  must-present, keep-out, and fact ownership.
+- [`content/fact-map.md`](content/fact-map.md): contested fact-class
+  arbitration between document types, where two or more types could each
+  plausibly claim the same fact.
+- [`references/progressive-disclosure.md`](references/progressive-disclosure.md):
+  the altitude vocabulary (L0–L3) and the stop test; per-shape travel order
+  lives in `document-shapes.md`.
+- [`references/document-shapes.md`](references/document-shapes.md): the
+  closed shape vocabulary, per-shape travel order, completeness rule, and
+  stop test.
+- [`references/graph/`](references/graph/README.md): provider dispatch and
+  selection.
+- [`references/document-composition.md`](references/document-composition.md):
+  topic ownership, normal-document no-duplication, and permanent agent-context
+  isolation.
+- [`references/provenance-tracking.md`](references/provenance-tracking.md):
+  metadata format and staleness.
+- [`references/evidence-presentation.md`](references/evidence-presentation.md):
+  reader-facing routing and source-evidence visibility.
+- [`references/code-presentation.md`](references/code-presentation.md): fenced
+  content roles, examples, and source-excerpt boundaries.
+- [`references/document-audit.md`](references/document-audit.md): independent
+  completion gate.
+- [`references/quality-bar.md`](references/quality-bar.md): mechanical and
+  whole-tree acceptance.
+- [`references/host-neutrality.md`](references/host-neutrality.md): neutral
+  vocabulary, forge-confinement.
+- [`references/portfolio.md`](references/portfolio.md): cross-repository
+  diligence.
+- [`references/illustration.md`](references/illustration.md): visual form
+  selection and illustration constraints.
+- [`references/voice.md`](references/voice.md): the per-section voice
+  vocabulary — one voice per group, stated as rules with do/don't pairs.
+- [`references/depth-and-audience.md`](references/depth-and-audience.md):
+  reader-facing depth (decision-relevant detail, not file/word count) and
+  audience-driven content scope.
+- [`references/model-depth-ladders.md`](references/model-depth-ladders.md):
+  `model_depth` rigor floors, distinct from reader-facing `target_depth`.
+- [`references/parallel-execution.md`](references/parallel-execution.md):
+  read-only evidence fan-out and the serial-orchestrator/parallel-worker
+  contract.
+- [`references/source-analysis.md`](references/source-analysis.md): the
+  bounded evidence ladder for querying a selected graph provider.
+- [`references/discovery-gate.md`](references/discovery-gate.md):
+  open-vocabulary profile-cue judgment after deterministic detection.
+- [`references/decision-records.md`](references/decision-records.md): when a
+  decision earns a durable record and where it lives.
+- [`references/profiles/README.md`](references/profiles/README.md):
+  audience and repository-shape reader-facing guidance.
+- [`references/docs-tree.md`](references/docs-tree.md): project scale
+  classification and compact/standard layout (in addition to paths, naming,
+  tiers, and placement above).
+- [`workflows/revision.md`](workflows/revision.md): document retirement and
+  current-template conformance enforcement.
+- `content/<group>/instructions.md` (merged, one section per document) and
+  `agent-context/agents-kernel.instruction.md` (single shared instruction):
+  writing craft and linking craft only — per-document
+  fact ownership lives in the contract, not here.
+- `content/<group>/templates/`: output scaffolds only.
+
+When a rule changes, update its owner and replace other repetitions with a
+link.
+
+## Workflow files
+
+| File | Owns |
+|---|---|
+| `workflows/intake.md` | Bare `/docforge` invocation, discovery gate, the two-turn scope-question contract (Turn 1 = goal/scope + layout + target readers, plus flow mode on flow-touching revises; Turn 2 = tier, profiles, audience, graph source, execution mode), confirmation, graph-provider choice |
+| `workflows/planning.md` | Repository inspection, tier/profile selection, dynamic-document discovery, manifest init, dry-run tree, plan checkpoint, fresh-start flow gate |
+| `workflows/writing.md` | Per-document execution card, evidence, scaffolding, provenance, status transitions, independent audit; continue incomplete runs |
+| `workflows/revision.md` | `/docforge-revise` (incl. shared flags), single-document update/refresh, revise-side flow pipeline, retirement, template conformance |
+| `workflows/validation.md` | Staleness, migration, whole-tree audit, cross-document quality gate |
+| `workflows/dashboard.md` | `dashboard scan`/`start`/`status`/`stop`: diagnostics, metadata reconcile, signatures, build-if-changed, serve, open |
+| `workflows/tools.md` | Every public script: Python/Node invocation, inputs, outputs, exit codes |
+
+See [`workflows/README.md`](workflows/README.md) to route an unfamiliar
+invocation to exactly one file.
+
+## Internal Runtime Conventions
+
+- **Dual Field Naming**: Catalog records own `template_file` (specifying the source template path under `content/`), while materialized project manifests carry `scaffold_template` (copied from `template_file` during manifest scaffolding to maintain legacy manifest compatibility).
+- **Two Special-File Sets**: The runtime maintains two distinct special-file sets defined in [`runtime/common/python/special_files`](runtime/common/python/special_files.py):
+  - `SPECIAL_DOC_SOURCES` (`{"agents-kernel.md", "claude-local-md.md"}`): template source filenames scanned during metadata validation (`validate_metadata`). The one kernel source is shared by both full root-kernel outputs.
+  - `SPECIAL_DOC_OUTPUTS` (`{"AGENTS.md", "CLAUDE.md", "CLAUDE.local.md"}`): materialized output doc filenames that bypass standard linting and scaffolding constraints (`scaffold_docs`, `lint_document`, `migrate_metadata`). `AGENTS.md` and `CLAUDE.md` each pass the dedicated `lint_agents_kernel` rubric in place of `lint_document`; `CLAUDE.local.md` is the literal local-preference extension and needs no kernel rubric.

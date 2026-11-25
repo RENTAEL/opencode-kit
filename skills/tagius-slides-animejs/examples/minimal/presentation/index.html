@@ -1,0 +1,46 @@
+<!--
+  HTML shell for the slides-animejs bundle. `scripts/build.py` replaces
+  slides-animejs Pattern Tour and injects `window.__SLIDES__` inline just before overlay.js.
+-->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>slides-animejs Pattern Tour</title>
+  <link rel="stylesheet" href="assets/slides.css" />
+  <link rel="stylesheet" href="assets/overlay.css" />
+</head>
+<body>
+  <div class="stage">
+    <div class="slide-frame" id="slideFrame"></div>
+  </div>
+
+  <div class="overlay" id="overlay">
+    <div class="overlay-top">
+      <div class="progress-bar"><div class="progress-fill" id="progressFill"></div></div>
+    </div>
+    <div class="overlay-bottom">
+      <button class="ov-btn" id="btnPrev" aria-label="Previous slide">◀</button>
+      <div class="ov-counter"><span id="slideIdx">1</span> / <span id="slideTotal">N</span></div>
+      <button class="ov-btn" id="btnNext" aria-label="Next slide">▶</button>
+      <button class="ov-btn" id="btnGrid" aria-label="Overview">▦</button>
+      <button class="ov-btn" id="btnFull" aria-label="Fullscreen">⛶</button>
+      <button class="ov-btn" id="btnNotes" aria-label="Speaker notes">📝</button>
+    </div>
+  </div>
+
+  <aside class="notes-panel hidden" id="notesPanel">
+    <h3>Speaker notes</h3>
+    <div id="notesBody"></div>
+  </aside>
+
+  <div class="grid-view hidden" id="gridView"></div>
+
+  <!-- slide manifest injected by build.py -->
+  <script>
+    window.__SLIDES__ = [{"file": "slide-01.html", "title": "Title (entrance + signature idle)", "notes": "The idle is the memory anchor — keep it subtle.", "status": "finalized"}, {"file": "slide-02.html", "title": "Section divider", "notes": "One accent colour fills the field; text stays high-contrast.", "status": "finalized"}, {"file": "slide-03.html", "title": "Two-column content (idle + footer safe-zone)", "notes": "Content clears the 26px footer band.", "status": "finalized"}, {"file": "slide-04.html", "title": "Step protocol (PowerPoint-style click-advance)", "notes": "Parent calls step 0 on enter (base state). `__slideTL[3]` cancel cleans up.", "status": "finalized"}, {"file": "slide-05.html", "title": "Closing", "notes": "Bookends the title slide.", "status": "finalized"}];
+  </script>
+  <script type="module" src="assets/overlay.js"></script>
+</body>
+</html>

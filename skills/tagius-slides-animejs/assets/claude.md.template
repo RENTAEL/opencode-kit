@@ -1,0 +1,35 @@
+# slides-animejs working memory
+
+## Workflow contract
+
+- This project is a `slides-animejs` presentation. The canonical plan is `presentation_plan.md`.
+- Phases: bootstrap → intake → content brainstorm → content Q&A → design brainstorm → visuals → static draft → draft feedback → animation build → QA → handoff.
+- Never run the final animation build (phase 8) without explicit user go-ahead.
+- Always update `presentation_plan.md` when content or design tokens change.
+- Visuals live in `./visuals/`. Auto-extracted media: `./visuals/from-pptx/`. Memes: `./visuals/memes/`.
+- Memes only when content tone permits, ~1 per 6 slides max, never in academic decks unless the user opts in.
+- Output bundle is `./presentation/`. Reset by re-running `scripts/build.py` — it is idempotent.
+- `AGENTS.md` is a mirror of this file. Keep them in sync; rewrite both atomically on phase transitions.
+
+## Current phase
+
+{{PHASE_ID}} — {{PHASE_STATUS}}
+
+## Anime.js v4 condensed reference
+
+{{ANIMEJS_SNAPSHOT}}
+
+## Captured design tokens
+
+```yaml
+{{DESIGN_TOKENS_YAML}}
+```
+
+## User preferences captured this session
+
+- audience: {{AUDIENCE}}
+- length: {{LENGTH}}
+- tone: {{TONE}}
+- academic: {{ACADEMIC}}
+- meme allowance: {{MEMES_ALLOWED}}
+- palette preference: {{PALETTE_PREF}}

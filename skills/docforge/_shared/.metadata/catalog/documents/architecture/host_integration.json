@@ -1,0 +1,33 @@
+{
+  "id": "host_integration",
+  "type": "host-integration",
+  "summary": "Host contract, activation, contribution points, permissions, compatibility, sandbox, failure",
+  "contract_file": "content/architecture/contracts/host-integration.md",
+  "path": "docs/architecture/host-integration.md",
+  "group": "architecture",
+  "selection": {
+    "mode": "static",
+    "min_tier": "spine",
+    "selectors": {
+      "shapes": [
+        "plugin-extension"
+      ]
+    },
+    "condition": null
+  },
+  "instruction_file": "content/shared/host-integration.instruction.md",
+  "requires": [
+    "code_graph",
+    "manifests"
+  ],
+  "target_depth": "deep-dive",
+  "answer_shape": "answer-first",
+  "write_order": 18,
+  "provenance_mode": "sections",
+  "audit_profile": "architecture",
+  "dominant_form": "table",
+  "contract_revision": "3.0.0",
+  "template_file": "content/architecture/templates/host-integration.md",
+  "compact_group": "architecture_compact",
+  "compact_order": 21
+}

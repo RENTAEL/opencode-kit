@@ -1,0 +1,44 @@
+{
+  "name": "humanizer21",
+  "version": "1.2.4",
+  "description": "Turkmen language humanizer: a skill that removes AI tells and fixes Turkmen spelling, grammar and punctuation.",
+  "bin": {
+    "humanizer21": "bin/install.js"
+  },
+  "files": [
+    "bin/",
+    "references/",
+    "scripts/barla.py",
+    "scripts/sozluk/",
+    "prompts/",
+    "SKILL.md",
+    "LICENSE",
+    "THIRD_PARTY_NOTICES.md",
+    "README.md"
+  ],
+  "scripts": {
+    "test": "node tests/install.test.js && python3 -m unittest discover -s tests -p 'test_*.py'"
+  },
+  "keywords": [
+    "turkmen",
+    "turkmen-language",
+    "humanizer",
+    "proofreading",
+    "agent-skill",
+    "claude-skill",
+    "nlp"
+  ],
+  "author": "Novruz Garryyev",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/novgar21/humanizer21.git"
+  },
+  "homepage": "https://github.com/novgar21/humanizer21#readme",
+  "bugs": {
+    "url": "https://github.com/novgar21/humanizer21/issues"
+  },
+  "engines": {
+    "node": ">=16"
+  }
+}

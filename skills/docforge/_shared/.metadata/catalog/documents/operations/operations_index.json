@@ -1,0 +1,28 @@
+{
+  "id": "operations_index",
+  "type": "folder-index",
+  "summary": "Operations documentation overview: what this section covers and the reader question each operations document answers",
+  "contract_file": "content/shared/folder-index.contract.md",
+  "path": "docs/operations/README.md",
+  "group": "operations",
+  "selection": {
+    "mode": "static",
+    "min_tier": "diligence",
+    "selectors": {},
+    "condition": null
+  },
+  "instruction_file": "content/shared/folder-index.instruction.md",
+  "requires": [],
+  "target_depth": "orientation",
+  "answer_shape": "router",
+  "write_order": 70,
+  "nav_order": 50,
+  "provenance_mode": "sections",
+  "audit_profile": "router",
+  "dominant_form": null,
+  "template_file": "content/shared/section-readme.template.md",
+  "title": "Operations",
+  "contract_revision": "3.0.0",
+  "compact_group": "operations_compact",
+  "compact_order": 1
+}

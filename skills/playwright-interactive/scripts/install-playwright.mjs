@@ -1,0 +1,146 @@
+#!/usr/bin/env node
+
+import fs from 'node:fs'
+import { createRequire } from 'node:module'
+import os from 'node:os'
+import path from 'node:path'
+import { fileURLToPath } from 'node:url'
+import { spawn } from 'node:child_process'
+
+const PLAYWRIGHT_VERSION = '1.62.1'
+const CAMOUFOX_VERSION = '0.13.0'
+const SCRIPT_PATH = fileURLToPath(import.meta.url)
+const PLAYWRIGHT_CACHE_DIR = path.join(
+  process.env.XDG_CACHE_HOME || path.join(process.env.HOME || os.homedir(), '.cache'),
+  'opencode',
+  'playwright'
+)
+const BIN_DIR = path.join(PLAYWRIGHT_CACHE_DIR, 'node_modules', '.bin')
+const PLAYWRIGHT_BROWSERS_PATH = path.join(PLAYWRIGHT_CACHE_DIR, 'browsers')
+const CAMOUFOX_INSTALL_DIR = path.join(PLAYWRIGHT_CACHE_DIR, 'camoufox')
+const TEMP_DIR = path.join(PLAYWRIGHT_CACHE_DIR, 'tmp')
+const LOCK_PATH = path.join(PLAYWRIGHT_CACHE_DIR, '.playwright-setup.lock')
+const PLAYWRIGHT_HOST_PLATFORM_OVERRIDE =
+  process.env.PLAYWRIGHT_HOST_PLATFORM_OVERRIDE ||
+  (process.platform === 'linux' && process.arch === 'x64' && isUbuntu2604()
+    ? 'ubuntu24.04-x64'
+    : undefined)
+
+if (PLAYWRIGHT_HOST_PLATFORM_OVERRIDE) {
+  process.env.PLAYWRIGHT_HOST_PLATFORM_OVERRIDE = PLAYWRIGHT_HOST_PLATFORM_OVERRIDE
+}
+
+const setupEnv = {
+  ...process.env,
+  PLAYWRIGHT_CACHE_DIR,
+  PLAYWRIGHT_BROWSERS_PATH,
+  CAMOUFOX_INSTALL_DIR,
+  TMPDIR: TEMP_DIR
+}
+
+function isUbuntu2604() {
+  try {
+    const release = fs.readFileSync('/etc/os-release', 'utf8')
+    return /(?:^|\n)ID=ubuntu(?:\n|$)/u.test(release) &&
+      /(?:^|\n)VERSION_ID="?26\.04"?(?:\n|$)/u.test(release)
+  } catch {
+    return false
+  }
+}
+
+function run(command, args) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, args, { env: setupEnv, stdio: 'inherit' })
+
+    child.on('error', reject)
+    child.on('close', (code, signal) => {
+      if (code === 0) {
+        resolve()
+        return
+      }
+
+      reject(new Error(`${command} exited with ${signal ? `signal ${signal}` : `code ${code}`}`))
+    })
+  })
+}
+
+function packageVersion(name) {
+  try {
+    const packagePath = path.join(PLAYWRIGHT_CACHE_DIR, 'node_modules', name, 'package.json')
+    return JSON.parse(fs.readFileSync(packagePath, 'utf8')).version
+  } catch {
+    return undefined
+  }
+}
+
+function packagesReady() {
+  return (
+    packageVersion('playwright') === PLAYWRIGHT_VERSION &&
+    packageVersion('playwright-core') === PLAYWRIGHT_VERSION &&
+    packageVersion('camoufox-js') === CAMOUFOX_VERSION
+  )
+}
+
+const requireFromCache = createRequire(path.join(PLAYWRIGHT_CACHE_DIR, '__playwright__.cjs'))
+
+function chromiumReady() {
+  try {
+    const playwright = requireFromCache('playwright')
+    return fs.existsSync(playwright.chromium.executablePath())
+  } catch {
+    return false
+  }
+}
+
+// launchPath() resolves the active Camoufox build and throws, without
+// downloading, when it is missing or unsupported by the installed camoufox-js.
+function camoufoxReady() {
+  try {
+    const pkgman = requireFromCache('camoufox-js/dist/pkgman.js')
+    return fs.existsSync(pkgman.launchPath())
+  } catch {
+    return false
+  }
+}
+
+async function install() {
+  fs.mkdirSync(TEMP_DIR, { recursive: true })
+
+  if (!process.argv.includes('--locked')) {
+    await run('flock', ['-x', LOCK_PATH, process.execPath, SCRIPT_PATH, '--locked'])
+    return
+  }
+
+  if (!packagesReady()) {
+    await run('bun', [
+      'add',
+      '--cwd',
+      PLAYWRIGHT_CACHE_DIR,
+      '--linker',
+      'hoisted',
+      '--ignore-scripts',
+      `playwright@${PLAYWRIGHT_VERSION}`,
+      `camoufox-js@${CAMOUFOX_VERSION}`
+    ])
+    fs.rmSync(CAMOUFOX_INSTALL_DIR, { recursive: true, force: true })
+  }
+
+  if (!chromiumReady()) {
+    await run(path.join(BIN_DIR, 'playwright'), ['install', 'chromium'])
+  }
+
+  if (!camoufoxReady()) {
+    await run(path.join(BIN_DIR, 'camoufox-js'), ['fetch'])
+  }
+
+  if (!packagesReady() || !chromiumReady() || !camoufoxReady()) {
+    throw new Error('Playwright runtime verification failed')
+  }
+
+  console.log(`Playwright runtime ready at ${PLAYWRIGHT_CACHE_DIR}`)
+}
+
+install().catch((error) => {
+  console.error(`Playwright runtime setup failed: ${error.message}`)
+  process.exitCode = 1
+})

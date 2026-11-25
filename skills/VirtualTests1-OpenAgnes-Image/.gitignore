@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+user_prefs.json
+outputs/
+.env
+README参考.MD

@@ -1,0 +1,52 @@
+{
+  "id": "reference_compact",
+  "type": "compact-doc",
+  "title": "Reference",
+  "summary": "Compact reference section: configuration, limitations, tech stack, plus (Diligence) the glossary — in one file",
+  "contract_file": "content/compact/contracts/reference.md",
+  "path": "docs/reference.md",
+  "group": "reference",
+  "selection": {
+    "mode": "compact",
+    "min_tier": "spine",
+    "selectors": {},
+    "condition": null
+  },
+  "instruction_file": "content/compact/instructions.md",
+  "requires": [
+    "code_graph",
+    "git_history",
+    "manifests"
+  ],
+  "target_depth": "orientation",
+  "answer_shape": "merged-section-spine",
+  "write_order": 60,
+  "nav_order": 40,
+  "provenance_mode": "sections",
+  "audit_profile": "standard",
+  "dominant_form": null,
+  "template_file": "content/compact/templates/reference.template.md",
+  "contract_revision": "3.0.0",
+  "compact_target": "docs/reference.md",
+  "compact_members": [
+    "reference_index",
+    "configuration",
+    "limitations",
+    "tech_stack",
+    "glossary",
+    "api_reference",
+    "api_errors",
+    "api_rate_limits",
+    "cli_commands",
+    "cli_output",
+    "extension_points",
+    "library_compatibility",
+    "data_types",
+    "model_card",
+    "browser_support",
+    "platform_compatibility",
+    "performance_budgets",
+    "infra_resources",
+    "infra_access"
+  ]
+}

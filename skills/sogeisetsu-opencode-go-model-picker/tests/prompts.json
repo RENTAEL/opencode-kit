@@ -1,0 +1,20 @@
+[
+  {
+    "id": 1,
+    "scenario": "典型场景：全量诊断",
+    "prompt": "帮我检查我的 OpenCode 自定义 agent 模型配置符不符合最新 Go 套餐，给点建议",
+    "expected": "跑 `node scripts/go.mjs run` 一次（agent 盘点、Console 状态、本地用量、目录/价格/评分、套餐变化、Basis、候选清单都在同一个 run.json 里，且带来源与日期）→ 非 authorized 时把 Console 引导放到报告末尾 → needs.modeQuestion 为真才问最多 2 题（budget/balanced/quality）→ 从 `data.candidates` 里选 id，链长按来源（能装链的来源 2-4 条，原生 / Markdown 单 model 来源 1 条），每个 agent 一句 why，视觉/推理能力回实验室官方文档核实 → `go.mjs report` 出表（基准行、headroom、$/session、占模型额度、三个池窗口、月占用）→ 自己补要点与风险 → `go.mjs check <report> --run <run.json> --picks <picks.json>` 必须全过 → 停在写入前等确认，不改任何配置"
+  },
+  {
+    "id": 2,
+    "scenario": "有明确意图的变体：省钱模式",
+    "prompt": "省钱优先，帮我把 agent 模型都换成便宜的",
+    "expected": "识别为 budget 模式且不再问模式问题（`--mode budget`）→ 保留 vision/reasoning 能力地板（不选纯文本最便宜模型）→ 数据不可达时用带日期的价格种子，run.json 里 data.quality=seed，绝不称其为实时 → report 出的表带基准行与计价列 → 逐行检查被支配模型要么替换要么在 why 列说明 → 先 `apply`（dry-run）展示精确 diff，经 question 工具确认后才允许 `--write`，且只写用户点名的目标文件"
+  },
+  {
+    "id": 3,
+    "scenario": "失败场景：断网回退",
+    "prompt": "断网了，还能配模型吗？",
+    "expected": "用 `node scripts/go.mjs run --offline`：不访问网络，价格走带日期的种子并在 run.json 标注 seed（过期则 EXPIRED），目录/评分保留上一份快照与日期 → 不编造任何价格/额度/模型号 → 不可核实的能力标『待人工核实』→ 照常出推荐与回退链，说明数据陈旧的风险；种子也缺失时 data.quality=none，金额列留空、只给相对选型 → 仍停在写入前等确认"
+  }
+]

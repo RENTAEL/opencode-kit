@@ -1,0 +1,79 @@
+---
+name: oc-slides
+description: "Three packaged themes live under `assets/themes/`, each with a **day** (light console) and **night** (dark console) scheme selected per deck via headmatter `colorSchema`:"
+---
+# Slidev Retro Deck
+
+## Intent
+
+- **Goal:** A 16:9 Slidev deck with a retro console identity (scanlines, tube glow, terminal type, blinking cursor), every slide visually verified before the deck is declared done.
+- **Limits:**
+  - Create each deck in its own directory (for example `.ai/slides/<deck-name>/`), never inside a managed component tree.
+  - `setup/mermaid.ts` exports a plain function ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â no `@slidev/types` import.
+  - No color literals in mermaid fences: accent nodes with `class <id> a|b|aux` (styled by the setup's `themeCSS`), never `classDef` ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â `var()` fails to parse and hexes break the day/night switch.
+  - One accent = one meaning, everywhere (text, borders, chips, stamps, diagram nodes).
+  - Respect each theme's heading type scale ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â pixel fonts (Silkscreen, Press Start 2P) are far wider than VT323 and overflow at CRT sizes.
+  - Presenter notes are a trailing `<!-- ... -->` HTML comment inside the slide. Keep the `prefers-reduced-motion` guard on the blinking cursor.
+- **Fails if:** "done" is claimed without the full PNG inspection of every slide in the scheme(s) the deck will actually use, any mermaid block fails to parse, or any slide clips or overflows.
+
+## Context
+
+- **Reads:** the resources below.
+- **Never reads:** none.
+- **Persona:** deck builder with a visual-QA discipline.
+- **Scope:** requests for a slide deck or presentation, especially with Slidev or a retro/terminal/Matrix look. The workflow applies to any Slidev deck; the packaged identity is the retro console.
+
+## Expectations
+
+- **Scenarios:** WHEN a deck is requested THEN run the workflow; WHEN a diagram overflows THEN apply the sizing playbook in order.
+- **Done means:** the verification loop (workflow step 8) passed on a full export.
+- **Quality needs:** legible slides, consistent accent mapping.
+
+## Method
+
+### Themes
+
+Three packaged themes live under `assets/themes/`, each with a **day** (light console) and **night** (dark console) scheme selected per deck via headmatter `colorSchema`:
+
+| Theme | Night | Day | Fonts (headings / body) |
+|---|---|---|---|
+| `crt-phosphor` | green/amber phosphor on black | phosphor ink on paper-green | VT323 / JetBrains Mono |
+| `dos-terminal` | yellow/cyan on Borland blue | navy ink on ivory paper | Silkscreen / IBM Plex Mono |
+| `synthwave-arcade` | magenta/cyan neon on deep purple | sunrise pastel arcade | Press Start 2P / Space Mono |
+
+### Workflow
+
+1. **Scaffold** ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â copy `assets/scaffold/package.json` and `assets/scaffold/pnpm-workspace.yaml` into the deck directory, then install with pnpm. `playwright-chromium` (needed by `slidev export`) only downloads because the workspace file allows its build script. `npm` may be aliased to pnpm in some setups, so use explicit pnpm commands. Run `npx slidev slides.md` for a hot-reloading dev server.
+2. **Headmatter** ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â start from `assets/slides-skeleton.md`. Non-obvious facts: the seriph theme maps the `fonts: serif` slot to **headings**, so the display font goes there (each theme's font pair is listed in the skeleton comments and the theme CSS header); `sans`/`mono` carry the body mono font; `colorSchema` picks the scheme ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â `dark` = night console, `light` = day console, `auto` = system preference plus the UI toggle; `background: none` lets the CSS gradient show through.
+3. **Design system** ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â pick a theme from the table and copy its `style.css` to the deck root (Slidev auto-loads it). Every theme is token-based: day palette on `:root`, night overrides on `html.dark`, so both schemes come from the same file. Each defines two semantic accents `--accent-a`/`--accent-b`: map them per the Limits (`.tx-a`/`.tx-b`, `.bd-a`/`.bd-b`).
+4. **Stamps** ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â every slide carries an absolutely positioned top-right badge naming its section/topic, placed right after the slide separator: `<div class="stamp stamp-a">topic</div>`. Slides spanning both topics use `.stamp-both` with one span per accent.
+5. **Author credit** ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â copy `assets/global-bottom.vue` to the deck root; Slidev renders it on every slide, and the theme's `.credit` class pins the handle small and dimmed at the bottom-left. Default handle is `@andresnator`; edit the copied file if the deck belongs to someone else.
+6. **Mermaid theming** ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â copy the chosen theme's `mermaid-setup.ts` to `setup/mermaid.ts`. No `@slidev/types` import: it is not a direct dependency, strict pnpm cannot resolve it, and the vite error renders on the first slide. Each setup carries a day and a night palette and picks one at diagram render time from Slidev's scheme class; a live scheme toggle does not re-render existing diagrams (reload), and exports are always consistent. Accent nodes per the Limits (`class <id> a|b|aux`); size diagrams per the playbook below.
+7. **Overflow discipline** ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â mono fonts are wider and taller than proportional ones. Dense slides get per-slide frontmatter `class: text-sm`; footers get `text-xs`; watch the last table row and the final line of any box near the bottom edge.
+8. **Verification loop (mandatory)**:
+   1. Parse every mermaid block with `assets/mermaid-check/check.mjs` (install its deps from the sibling `package.json` in a scratch dir): `node check.mjs <deck>/slides.md`.
+   2. Export: `npx slidev export slides.md --format png --output slide-export --timeout 90000`.
+   3. Visually inspect **every** PNG for clipping, overflow, and legibility; fix and re-export until clean. `--range N` iterates faster but wipes the output directory ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â always finish with a full export.
+
+### Diagram sizing playbook
+
+Apply in order; stop when the diagram fits as large as possible:
+
+| Lever | How |
+|---|---|
+| Orientation | `flowchart LR` for pipelines; `TD` overflows 16:9 |
+| Scale | fence option `{scale: 0.4ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Å“0.6}` ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â mono fonts need the lower end |
+| Spacing | `{scale: X, flowchart: {nodeSpacing: 35, rankSpacing: 36}}` ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â fence options merge into `mermaid.initialize` |
+| Label trim | shorten the widest node label; move the info to a caption under the diagram |
+| Width | `.mermaid` in the theme's `style.css` reclaims the slide's side padding via negative margins |
+| Composition | diagram-only slides get frontmatter `class: diagram-center` to center vertically |
+
+### Resources
+
+- `assets/themes/<name>/style.css` ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â day/night token-based theme (scanlines, glow, stamps, chips, diagram helpers).
+- `assets/themes/<name>/mermaid-setup.ts` ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â matching day/night mermaid palettes for `setup/mermaid.ts`.
+- `assets/slides-skeleton.md` ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â headmatter plus cover, content, and diagram slide examples.
+- `assets/global-bottom.vue` ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â per-slide bottom-left author credit (styled by each theme's `.credit`).
+- `assets/scaffold/` ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â `package.json` and `pnpm-workspace.yaml` templates.
+- `assets/mermaid-check/` ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â parse validator for mermaid blocks.
+- `references/troubleshooting.md` ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â symptom ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ cause ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ fix catalog from real failures.

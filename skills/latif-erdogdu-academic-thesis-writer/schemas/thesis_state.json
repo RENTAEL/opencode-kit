@@ -1,0 +1,321 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/latif-erdogdu/academic-thesis-writer/schemas/thesis_state.json",
+  "title": "Tez Durumu",
+  "description": "Tezun butun varlik kayitlarini ve insan onay kapilarini tutan kok belge.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "thesis_id",
+    "language",
+    "human_approvals",
+    "evidence_registry",
+    "claims_registry",
+    "findings_registry",
+    "discussion_registry",
+    "conclusion_registry",
+    "gap_registry",
+    "audit_registry",
+    "search_runs",
+    "sources",
+    "citations"
+  ],
+  "properties": {
+    "$comment": {
+      "type": "string"
+    },
+    "schema_version": {
+      "const": "1.0"
+    },
+    "thesis_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "title": {
+      "type": "string"
+    },
+    "field": {
+      "type": "string"
+    },
+    "discipline": {
+      "type": "string"
+    },
+    "degree": {
+      "type": "string"
+    },
+    "language": {
+      "type": "string",
+      "default": "tr"
+    },
+    "research_problem": {
+      "type": "string"
+    },
+    "purpose": {
+      "type": "string"
+    },
+    "style_profile": {
+      "type": "string"
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "updated_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "version": {
+      "type": "integer",
+      "minimum": 1,
+      "default": 1
+    },
+    "research_questions": {
+      "type": "array",
+      "items": {
+        "$ref": "research_question.json"
+      }
+    },
+    "hypotheses": {
+      "type": "array",
+      "items": {
+        "$ref": "hypothesis.json"
+      }
+    },
+    "conceptual_framework": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "methodology": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "design": {
+          "type": "string"
+        },
+        "population": {
+          "type": "string"
+        },
+        "sample": {
+          "type": "string"
+        },
+        "sampling_method": {
+          "type": "string"
+        },
+        "data_collection": {
+          "type": "string"
+        },
+        "data_analysis": {
+          "type": "string"
+        }
+      }
+    },
+    "chapters": {
+      "type": "array",
+      "items": {
+        "$ref": "chapter.json"
+      }
+    },
+    "evidence_registry": {
+      "type": "array",
+      "items": {
+        "$ref": "evidence.json"
+      }
+    },
+    "claims_registry": {
+      "type": "array",
+      "items": {
+        "$ref": "claim.json"
+      }
+    },
+    "findings_registry": {
+      "type": "array",
+      "items": {
+        "$ref": "finding.json"
+      }
+    },
+    "discussion_registry": {
+      "type": "array",
+      "items": {
+        "$ref": "discussion.json"
+      }
+    },
+    "conclusion_registry": {
+      "type": "array",
+      "items": {
+        "$ref": "conclusion.json"
+      }
+    },
+    "gap_registry": {
+      "type": "array",
+      "items": {
+        "$ref": "research_gap.json"
+      }
+    },
+    "audit_registry": {
+      "type": "array",
+      "items": {
+        "$ref": "audit.json"
+      }
+    },
+    "search_runs": {
+      "type": "array",
+      "items": {
+        "$ref": "search_run.json"
+      }
+    },
+    "sources": {
+      "type": "array",
+      "items": {
+        "$ref": "source.json"
+      }
+    },
+    "citations": {
+      "type": "array",
+      "items": {
+        "$ref": "citation.json"
+      }
+    },
+    "paragraphs": {
+      "type": "array",
+      "items": {
+        "$ref": "paragraph.json"
+      }
+    },
+    "datasets": {
+      "type": "array",
+      "items": {
+        "$ref": "dataset.json"
+      }
+    },
+    "analyses": {
+      "type": "array",
+      "items": {
+        "$ref": "analysis.json"
+      }
+    },
+    "statistics": {
+      "type": "array",
+      "items": {
+        "$ref": "statistic.json"
+      }
+    },
+    "tables": {
+      "type": "array",
+      "items": {
+        "$ref": "table.json"
+      }
+    },
+    "figures": {
+      "type": "array",
+      "items": {
+        "$ref": "figure.json"
+      }
+    },
+    "definitions": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "variables": {
+      "type": "array",
+      "items": {
+        "$ref": "variable.json"
+      }
+    },
+    "open_questions": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "quality_issues": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "human_approvals": {
+      "description": "Yedi onay kapısının anlık durumu. Değer ya eski `true`/`false` boolean'ıdır (geriye uyum; içerik özeti yoktur, tazelik denetlenemez) ya da `approval.json` onay nesnesidir.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "research_question",
+        "search_strategy",
+        "source_set",
+        "research_gap",
+        "methodology",
+        "findings",
+        "final_thesis"
+      ],
+      "properties": {
+        "research_question": { "$ref": "#/$defs/kapi" },
+        "search_strategy": { "$ref": "#/$defs/kapi" },
+        "source_set": { "$ref": "#/$defs/kapi" },
+        "research_gap": { "$ref": "#/$defs/kapi" },
+        "methodology": { "$ref": "#/$defs/kapi" },
+        "findings": { "$ref": "#/$defs/kapi" },
+        "final_thesis": { "$ref": "#/$defs/kapi" }
+      }
+    },
+    "approval_events": {
+      "description": "Onay olay günlüğü. Yalnızca EKLENİR, silinmez veya güncellenmez. `human_approvals` anlık durumu, bu dizi geçmişi tutar.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["event_id", "gate", "action", "at"],
+        "properties": {
+          "event_id": {
+            "type": "string",
+            "pattern": "^EVT-[0-9]{4,}$"
+          },
+          "gate": {
+            "type": "string",
+            "enum": [
+              "research_question",
+              "search_strategy",
+              "source_set",
+              "research_gap",
+              "methodology",
+              "findings",
+              "final_thesis"
+            ]
+          },
+          "action": {
+            "type": "string",
+            "enum": ["approve", "reject", "revoke", "stale", "block"]
+          },
+          "actor": { "type": ["string", "null"], "maxLength": 120 },
+          "at": { "type": "string", "format": "date-time" },
+          "content_hash": {
+            "type": ["string", "null"],
+            "pattern": "^sha256:[0-9a-f]{16}$"
+          },
+          "reason": { "type": ["string", "null"], "maxLength": 2000 },
+          "comment": { "type": ["string", "null"], "maxLength": 2000 },
+          "audit_refs": {
+            "type": "array",
+            "items": { "type": "string", "pattern": "^AUD-[0-9]{3,}$" }
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "id": {
+      "type": "string",
+      "pattern": "^[A-Z]+-\\d{3,}$"
+    },
+    "kapi": {
+      "description": "Bir kapının durumu: ya eski boolean biçimi ya da tam onay kaydı.",
+      "oneOf": [
+        { "type": "boolean" },
+        { "$ref": "https://github.com/latif-erdogdu/academic-thesis-writer/schemas/approval.json" }
+      ]
+    }
+  }
+}

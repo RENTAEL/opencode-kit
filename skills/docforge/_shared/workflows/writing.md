@@ -1,0 +1,426 @@
+# Writing
+
+Owns: the per-document execution card, evidence retrieval, scaffolding,
+provenance stamping, status transitions, mechanical linting, the independent
+audit, and continuing an incomplete run (intake goal or plain language).
+
+For each routed document, load `model_depth` from
+`query_catalog.{py,js} --route` (see
+[`../runtime/catalog/README.md`](../runtime/catalog/README.md)) and apply the
+minimum rung in
+[`../references/model-depth-ladders.md`](../references/model-depth-ladders.md).
+It is not a heading checklist: verify evidence, decisions, controls,
+interfaces, and stopping conditions before requesting independent audit.
+Document lint also validates illustration budgets and presentation-safe
+fences.
+
+## Continue incomplete run
+
+Trigger: the user chooses Resume in intake or asks to continue an incomplete
+documentation run.
+
+1. Run `migrate_metadata.{py,js}` first — see [`validation.md`](validation.md)
+   "Manifest and provenance" (unconditional, idempotent).
+2. Load the current-version manifest.
+3. Continue the first non-complete, non-skipped document in write order.
+4. Follow **Write one document** below for that document.
+
+May combine with `--auto-accept`.
+
+## Write one document
+
+### Parallel fan-out of independent documents
+
+When several pending documents are independent — no child-before-ancestor
+ordering (see Bottom-up README closeout) and no shared target file with a
+sibling worker — the orchestrator may spawn sub-agents to write them in
+parallel. Spawn only when it genuinely helps (large batches, many small
+independent documents); otherwise keep the serial `write_order` loop.
+Contract ([`../references/parallel-execution.md`](../references/parallel-execution.md)):
+
+- Before fan-out, the orchestrator scaffolds any shared ancestor indexes
+  serially (indexes may exist before their children — see Bottom-up README
+  closeout), sets each document `in_progress` serially, and ensures
+  `manifest["graph"]` is locked — self-healing with
+  `set-graph --repo <repo>` first if it is somehow still absent. A worker
+  never calls `precheck_graph` or `set-graph` itself and never selects or
+  relocks a provider. On a Portfolio-collection root, an absent lock is
+  expected and is never self-healed.
+- Each worker receives its document card (route, `requires`, audience,
+  presentation, the illustration brief — the declared
+  `illustration_views` with their reader questions, `## Illustration`
+  trigger, per-illustration budget — and the group
+  voice), evidence budget, one target artifact, and the session's
+  locked graph provider/flow (`manifest["graph"]`, read-only). It runs the
+  artifact portion of **Write one document** — route, materialize,
+  re-ground (native provider first, whole-file read last, per step 4
+  below), provenance, mechanical lint — on **only its own artifact file**.
+  It never calls `manage_manifest` and never edits shared indexes, other
+  documents, the manifest, or the shared `.docforge/provenance/` folder
+  sidecars (`json` storage mode) — the orchestrator owns those.
+- Each worker returns a result contract (see parallel-execution.md): claims
+  grounded with sources, unresolved gaps, lint findings, any defect it
+  could not clear, and — in `json` storage mode — its stamped provenance
+  payload (`id`/`title`/`description` + `docforge_provenance`) for the
+  orchestrator to merge.
+
+After all workers return, the orchestrator merges (including serially
+merge-editing each worker's provenance payload into its folder sidecar when
+`project.provenance_storage` is `json`), applies the status transitions
+(`in_progress` → `generated`) serially per returned artifact, then proceeds
+to the independent audit (see Independent audit), which may also run
+concurrently with serial recording.
+
+### Parallel architecture writing (standard layout)
+
+After the architecture ledger and manifest are frozen, architecture
+documents follow the standard-layout parallel contract:
+
+1. Scaffold ancestor indexes serially; set statuses serially.
+2. Spawn one independent writer per architecture artifact where
+   dependencies permit. Each writer receives its route, contract, template,
+   depth, audience, and voice; **only its ledger slice**; canonical block and
+   relationship IDs; owned and forbidden fact classes; bounded evidence
+   questions; approved external sources; illustration obligations; its
+   target file; and its acceptance checks.
+3. Writers never edit the manifest, indexes, sidecars, sibling documents, or
+   the architecture ledger. They may run concurrently even when documents
+   cross-link, because the ledger freezes canonical identities; the
+   orchestrator adds final links after all targets exist.
+4. Merge provenance and state transitions serially; finalize section indexes
+   after children complete.
+
+### Parallel architecture writing (compact layout)
+
+Compact architecture targets one merged file, so direct parallel editing
+would collide. Use **payload-mode workers**:
+
+- Each worker independently writes one selected architecture section and
+  returns Markdown plus provenance; workers do not edit `docs/architecture.md`.
+- The orchestrator validates each payload, then merges sections
+  deterministically by catalog/compact order.
+- Provenance is merged serially.
+- Up to six subsystem sections fold into the compact architecture document;
+  additional subsystem candidates remain in the displayed candidate matrix
+  unless the user switches to standard layout. The pack gate must show this
+  loss of depth before confirmation.
+
+### Parallel flow writing (standard layout)
+
+After `flow_analysis decide` and `flow_index apply-analysis`, queue one writer
+per selected independent flow or sub-flow. A writer receives only its analysis
+card, catalog contract, deep-dive reference, source evidence, approved external
+sources, target path, and acceptance checks. Its section names, order, selected
+modules, and diagram forms come from `document_design`, never from a fixed flow
+shell or a sibling artifact.
+
+Writers edit only their assigned artifact. When selected targets exceed host
+slots, queue the excess; do not combine unrelated flows under a generic writer.
+Research workers fan out separately by deduplicated external question and
+return source payloads for serial provenance merging. Child sub-flows write and
+audit before their parent overview closes. Shared indexes, manifest state,
+flow-index updates, provenance sidecars, summaries, and links remain serial
+orchestrator operations.
+
+Composed member flows may use independent payload workers when useful. Their
+parent writer or the orchestrator performs one deterministic merge into the
+single owning artifact.
+
+### Parallel flow writing (compact layout)
+
+Compact layout still runs the complete v3 analysis and cold-card review. Give
+each selected flow an independent summary-payload worker; workers do not edit
+`docs/flows.md`. The orchestrator validates and merges concise adaptive
+sections deterministically, while retaining `.docforge/flow-analysis.json` as
+the complete pack for later expansion to standard layout.
+
+For the next document in `write_order` (serial mode):
+
+0. Immediately before materializing it, show the current structure summary
+   (or "tree unchanged since the displayed checkpoint") and a compact
+   **execution card**: path, reader, owned topics, evidence query, links to
+   owning documents, and acceptance checks. Include an **illustration
+   brief** — for flows, one line per `document_design.diagrams` entry; for
+   other types, one line per catalog `illustration_views` entry (its form,
+   section, and reader question), the instruction's illustration trigger,
+   and the per-illustration budget — plus the
+   group's **voice** line. Count follows those declared obligations, never
+   document length. Derive it from the
+   manifest and the document's route
+   (`query_catalog.{py,js} --route <id>`), never from a second plan file.
+   This applies to every document — fresh start and revise, flow documents
+   and static ones alike. A parallel worker receives the same card as its
+   brief (see Parallel fan-out) rather than printing its own.
+1. Check every capability in its `requires` list. On a Portfolio-collection
+   root (see [`../rules.md`](../rules.md) "Code-graph precondition"), a
+   `code_graph` requirement is already resolved as "no source of its own" —
+   never retry the graph gate or self-heal for that reason alone.
+2. Resolve its route in one call:
+
+   ```sh
+    python3 runtime/cli/python/query_catalog.py --route <id> --audience <audience>
+    node runtime/cli/js/query_catalog.js --route <id> --audience <audience>
+   # bun  runtime/cli/js/query_catalog.js --route <id> --audience <audience>
+   # deno run -A runtime/cli/js/query_catalog.js --route <id> --audience <audience>
+   ```
+
+   Apply the returned `primary_audience` and `presentation`, read its
+   content contract (`contract`), then its optional `instruction` for
+   writing craft. Use
+   [`../references/code-presentation.md`](../references/code-presentation.md)
+   and
+   [`../references/evidence-presentation.md`](../references/evidence-presentation.md).
+   Read the route's `illustration_views` — every view this type owes, each
+   with the reader question it answers — and author one diagram per view, in
+   the named section, using the declared form. `scaffold_docs --audit`
+   enforces coverage **by form**, so a layout tree never stands in for a
+   runtime scenario. A view marked `required: false` is
+   evidence-conditional: write it when the evidence exists, delete the
+   scaffold when it does not. Apply the instruction's `## Illustration`
+   block and the per-illustration budget in
+   [`../references/illustration.md`](../references/illustration.md) — a view
+   carrying its own `depth` is bounded by that instead of the document's.
+   Count follows declared obligations, never document length: a diagram that
+   answers no question of its own is decoration and is rejected. Apply the
+   group voice from
+   [`../references/voice.md`](../references/voice.md) the same way.
+3. Materialize that document and selected ancestor indexes:
+
+   ```sh
+   python3 runtime/cli/python/scaffold_docs.py \
+     --repo <repo> --manifest <repo>/.docforge/manifest.json \
+     --document <id>
+   node runtime/cli/js/scaffold_docs.js \
+     --repo <repo> --manifest <repo>/.docforge/manifest.json \
+     --document <id>
+   # bun / deno run -A against runtime/cli/js/scaffold_docs.js with the same flags
+   ```
+
+4. Set it `in_progress`, re-ground every required claim, replace all
+   scaffold markers and provenance tokens, and stamp complete provenance
+   2.2. Re-ground in this order — native tool first, whole-file read last:
+
+   1. Read the session's locked provider from `manifest["graph"]`
+      (`.docforge/manifest.json`). Never re-detect and never re-ask; it was
+      locked once, automatically, by `manage_manifest.{py,js} init`
+      ([`../references/graph/graph-sources.md`](../references/graph/graph-sources.md)
+      "Session persistence").
+   2. `graph` absent because no provider is ready **and this is not a
+      Portfolio-collection root** → self-heal once with
+      `manage_manifest.{py,js} set-graph --repo <repo>` (no other flags —
+      automatic, registry-priority pick), then continue. On a
+      Portfolio-collection root, `graph` legitimately stays absent for this
+      repository; do not self-heal or retry.
+   3. Dispatch the evidence question for each required claim through that
+      provider's native interface first — `graph-sources.md`'s dispatch
+      table (`codegraph_explore`, the GitNexus MCP tools/resources, or the
+      relevant Understand Anything skill).
+   4. Escalate to a direct file read only when the native query's returned
+      evidence does not cover the claim, following the bounded ladder in
+      [`../references/source-analysis.md`](../references/source-analysis.md):
+      targeted symbol/region read, then keyword search within the candidate
+      set, then whole-file only under its listed narrow conditions, then
+      git history last. Never open a whole file as the first move.
+
+   Provenance stamping — the writer gathers, verifies, and stamps all
+   candidate `path` / `role` / `git_blob` evidence inline:
+
+   - The generated markdown carries **no frontmatter at all**. Each
+     document's public identity (`id`, `title`, `description` — a
+     reader-facing one-liner, ≤ 160 chars, seeded from the catalog
+     `summary` in the manifest) and its provenance object live in one
+     git-tracked sidecar per docs folder:
+     `.docforge/provenance/<folder>.json` (e.g. `docs/architecture` →
+     `.docforge/provenance/docs/architecture.json`, repo-root files →
+     `root.json`). Stamp by merge-editing that folder's `files[<name>.md]`
+     entry — never rewrite sibling entries. Lint enforces a non-empty
+     description for written documents.
+   - One provenance `sections[]` entry per Markdown heading that makes
+     claims; `id` is that heading's anchor.
+   - Each claim records at least one repository-relative `path` with `role`
+     (`code`, `config`, `manifest`, `doc`, `test`, or `history`) and
+     `git_blob` = the SHA-1 of `blob <len>\0` + file bytes (same value as
+     `git hash-object <path>` and `check_staleness.{py,js}`'s blob helper).
+   - Always additionally stamp `git_blob_normalized` — the same blob-style
+     SHA-1 but over the file's bytes after normalizing line endings
+     (CRLF/CR -> LF), stripping trailing whitespace per line, and stripping
+     trailing blank lines at EOF; omit the field only when the file is not
+     UTF-8 text. A claim citing a specific line range rather than the whole
+     file → also record `evidence_range: {start, end}` (1-indexed,
+     inclusive, same convention as the `path#Lstart-Lend` body-text
+     evidence locators) and `range_blob` — the blob-style SHA-1 of just
+     those lines' bytes. Compute all three with one command so every write
+     turn hashes identically to what `check_staleness.{py,js}` recomputes
+     later: `hash_evidence.{py,js} --repo <repo> --path <path> [--range
+     <start>-<end>] --json`. Never hand-derive `git_blob_normalized` or
+     `range_blob` — unlike `git_blob` (which matches ubiquitous
+     `git hash-object`), these two have no standard-tool equivalent, so an
+     ad hoc reimplementation risks silently diverging from what
+     `check_staleness` recomputes later.
+   - Empty `sections: []` is valid only while the document is `planned` or
+     a fresh scaffold; lint rejects empty sections for written documents.
+   - Filled example and field rules:
+     [`../references/provenance-tracking.md`](../references/provenance-tracking.md).
+   - After an update that touched only some sections, restamp those
+     sections' sources and leave FRESH sections' provenance rows unchanged.
+   - In `json` storage mode the folder sidecar is a **shared file** —
+     parallel workers never write it (see Parallel fan-out): each worker
+     returns its stamped provenance payload in its result contract, and the
+     orchestrator merge-edits the sidecar entries serially per returned
+     artifact, together with the status transitions. Serial writers may
+     merge-edit the sidecar directly.
+
+5. Set it `generated`, then expand its source links:
+
+   ```sh
+   python3 runtime/cli/python/link_sources.py --repo <repo> \
+     --manifest <repo>/.docforge/manifest.json --file <path> --write
+   node runtime/cli/js/link_sources.js --repo <repo> \
+     --manifest <repo>/.docforge/manifest.json --file <path> --write
+   ```
+
+   The writer writes the readable authoring form
+   (`[readable label](path/to/file.ext#L10-L20)`); this pass pins it to the
+   current commit, validates that every path exists and every range is
+   inside its file, and stamps `provenance.git_commit`. A nonzero exit names
+   references that could not be resolved — fix the reference, never the URL
+   by hand. Skip this step when `project.repository` is undeclared: source
+   mentions then stay unlinked prose, which is a supported state, not a
+   defect (`manage_manifest set-repository` declares it once).
+6. Run the document linter and any audit-profile-specific mechanical
+   checks. Pass `--repo <repo>` so the linter knows the declared permalink
+   base; without it a legitimate permalink is reported like any other source
+   link. For the `agents-kernel` output (`AGENTS.md`, a
+   `SPECIAL_DOC_OUTPUTS` member that `lint_document.{py,js}` skips; see
+   [`../runtime/documents/README.md`](../runtime/documents/README.md)), the
+   mechanical gate is `lint_agents_kernel.{py,js} --file <path> --repo
+   <root>` in place of `lint_document.{py,js}`.
+7. Independently audit it (below).
+8. Record the result:
+
+   ```sh
+   python3 runtime/cli/python/manage_manifest.py audit \
+      --repo <repo> --id <id> --mode cold-pass \
+     --verdict PASS --report .docforge/audits/<id>.md
+   node runtime/cli/js/manage_manifest.js audit \
+      --repo <repo> --id <id> --mode cold-pass \
+     --verdict PASS --report .docforge/audits/<id>.md
+   # bun / deno run -A against runtime/cli/js/manage_manifest.js with the same args
+   ```
+
+9. A passing artifact may transition to `complete`. A failed artifact
+   becomes `needs_review`, then returns to `in_progress` for revision.
+10. Wire connections unconditionally. After the document reaches `complete`,
+    apply its instruction's Connections block — link every related document
+    it names that is selected and materialized — and update owning-index
+    related-document pointers. No related document exists yet → leave the
+    pointer out; the whole-tree gate's reachability and section-cohesion
+    checks are the backstop ([`validation.md`](validation.md) "Whole-tree
+    gate").
+
+Status transitions:
+
+```text
+planned → in_progress → generated → complete
+                       ↘ needs_review → in_progress
+```
+
+`skipped` is explicit. `complete` is rejected unless the manifest contains
+a passing `cold-pass` audit record.
+
+## Independent audit
+
+After writing, start a separate cold, artifact-only pass with only the
+artifact, its catalog contract, target depth, relevant quality checks, and
+cited sources; do not carry over writer reasoning (mechanical lint,
+including the `agents-kernel` carve-out, is step 6 above — not part of this
+pass). Record `mode: cold-pass`. Mechanical checks alone never produce a
+completion verdict. Full audit procedure:
+[`../references/document-audit.md`](../references/document-audit.md).
+
+Independent artifact-only audits may run concurrently, but their manifest
+results are recorded serially by the orchestrator as required by
+[`../references/parallel-execution.md`](../references/parallel-execution.md).
+
+### Architecture-pack audit
+
+For architecture groups, run one cold, artifact-only audit agent per finished
+document (concurrently where possible); auditors receive no writer reasoning.
+After individual passes, run a final **architecture-pack audit** that
+verifies:
+
+- every ledger block has exactly one reader-facing owner or an explicit
+  omission;
+- subsystem parents exist in high-level architecture;
+- cross-block edges agree across high-level, low-level, and subsystem
+  documents;
+- names, directions, protocols, deployment nodes, and trust boundaries do
+  not conflict;
+- specialized documents own their fact classes without duplication;
+- every selected document is reachable from the architecture index;
+- external references comply with the approved research policy;
+- unsupported detail is marked unknown;
+- no document passes merely because it is long or has enough headings.
+
+Record the result with `architecture_plan audit --repo <repo> --verdict
+<PASS|FAIL> --report <path>`. A failed pack audit sends affected documents to
+`needs_review`; corrections may fan out as another parallel artifact-only
+wave, followed by fresh cold audits and a repeated pack audit. Architecture
+groups cannot complete without a passing pack audit — the whole-tree gate
+also refuses a completed architecture group whose ledger audit is not
+`passed`.
+
+### Flow-pack audit
+
+After the per-document cold auditors finish, run one cross-flow, artifact-only
+pack audit before completing the flow group. It verifies:
+
+- every guarantee agrees with all terminal outcomes;
+- every analyzed step, decision, branch, wait, join, and rejoin is represented;
+- residual state, replay safety, recovery, and compensation are explained or
+  explicitly gapped;
+- parent and child ownership is exclusive, with parents closed after children;
+- actors, events, boundaries, and canonical names agree across flows;
+- external semantics comply with the selected research policy and resolve
+  through provenance `external_sources` and section `external_refs`;
+- conflicts and evidence gaps remain explicit; and
+- no artifact passes with a copied heading shell, generic failure bullets, or
+  other template-shaped filler.
+
+Record the result with `flow_analysis audit --repo <repo> --verdict PASS|FAIL
+--report <path>`. A failure returns affected artifacts to `needs_review`, then
+runs a fresh writer/auditor wave and repeats the pack audit. The flow group
+cannot complete while the ledger audit is not `passed`.
+
+## Bottom-up README closeout
+
+Section READMEs are the top-down entry points of the tree, so they are
+finalized **after** their child documents — never before. Ancestor indexes
+may be scaffolded early (so the tree exists), but a README must not be
+grounded or audited until the children it routes to are materialized.
+
+After every selected document passes its independent audit, close out the
+READMEs deepest-first:
+
+```text
+deepest collection READMEs (concepts, runbooks, decisions, migrations, epics)
+→ area READMEs (architecture, product, engineering, operations, reference,
+  security, contributing, agents, portfolio)
+→ docs/README.md
+→ root README.md
+```
+
+For each README-capable document (`folder-index`, `docs-index`, `ba-index`,
+`po-index`, `portfolio-index`, `portfolio-decisions-index`,
+`decision-index`; `flow-index` is rendered from the flow index first),
+re-ground it from repository evidence and the completed children:
+self-introduction, at-a-glance, scope and boundaries, start-here reading
+paths, child map with one reader question per child, related sections, and
+an honest empty state when no child is evidenced. Stamp provenance per
+heading, run the mechanical gate (`lint_document.{py,js}` plus the
+`scaffold_docs.{py,js} --audit` README child-coverage check), then the
+independent audit, and record the result. Never restate child-owned facts
+or link a child that is not selected and materialized.
+
+Next: once every selected document passes individually, proceed to
+[`validation.md`](validation.md) for the whole-tree gate.

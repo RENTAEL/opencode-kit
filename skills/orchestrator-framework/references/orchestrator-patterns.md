@@ -1,0 +1,235 @@
+# Orchestrator Patterns
+
+Shared execution rules, schemas, and patterns for all workflow orchestrators.
+
+Some heavily cross-referenced sections live in their own reference files:
+
+- [Delegation Rules](delegation-rules.md) — Skill/Task tool delegation contract (was Section 1)
+- [Dispatcher & Handoff Pattern](dispatcher-handoff.md) — subskill loop, mode table, per-step state writes (was Section 7)
+- [Command Namespacing](command-namespacing.md) — `owflow:` prefix rules (was Section 8)
+- [Gate Contract](gate-contract.md) — Entry Gate & Exit Gate skill contract, incl. exceptions (was Section 9)
+- [Fix Loop Contract](fix-loop-contract.md) — user-driven fix-then-reverify contract: option wording, iteration budget, exit conditions, per-iteration state writes
+
+Section numbering below is kept as-is so existing cross-references stay valid.
+
+---
+
+## 2. Phase Gate Behavior
+
+**`→ Pause` means STOP and USE question.** This is NOT optional. You MUST invoke the `question` tool and WAIT for user response. Proceeding without it is a protocol violation.
+
+All orchestrators pause at `→ Pause` transitions for user review and prompt for optional phases.
+
+**State ordering rule**: Phase state MUST NOT be updated to 'completed' (via orchestrator-state.yml or TaskUpdate) until AFTER the user responds to the exit gate. Correct sequence: finish phase work → call question → receive user response → update state to completed.
+
+### Phase Entry Checks
+
+Every phase that follows a `→ Pause` gate includes an entry check at its TOP:
+
+```
+> **Phase gate**: Confirm Phase N completion before executing.
+```
+
+This catches missed gates: if the previous phase's `→ Pause` was skipped (e.g., the model output a summary and moved on), the entry check forces the gate to fire before the next phase executes. If the gate already fired, continue normally.
+
+### AUTO-CONTINUE Rules
+
+When a phase ends with `→ **AUTO-CONTINUE**`:
+
+- You MAY output a brief phase summary (1-2 lines)
+- Do NOT end your turn
+- Do NOT use question
+- Do NOT wait for user input
+- After any summary, proceed immediately to the next phase
+
+**Common mistake**: Outputting a summary and then stopping/ending the turn. The summary is fine — stopping is not.
+
+### Anti-Patterns
+
+| Anti-Pattern                                                                      | Why It's Wrong                                                                                                                                                           |
+| --------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Proceeding without question at phase gates                                        | User loses control, can't review or stop                                                                                                                                 |
+| Saying "I'll pause here" without tool call                                        | Words are not pauses. Tool invocation required.                                                                                                                          |
+| Auto-accepting subagent decisions without asking                                  | User must consent to scope/approach decisions                                                                                                                            |
+| Outputting a summary after phase work, then ending turn before reaching `→ Pause` | Gate is skipped; user loses control at the most critical review point. The gate must be the FIRST action after phase work completes — no summaries, no output before it. |
+| Marking phase as completed (state/TaskUpdate) before the exit gate executes       | State corruption — downstream phases see false "completed" status. Gate → user response → state update. Never reverse this order.                                        |
+
+---
+
+## 3. Context Passing & Decisions
+
+### Context Passing
+
+All subagent prompts must include context from prior phases:
+
+```
+prompt: |
+  [Task instructions]
+  Task path: [path]
+
+  ## CONTEXT FROM PRIOR PHASES
+  [Key state fields from orchestrator-state.yml]
+  [Summaries of completed phases from phase_summaries]
+
+  ## RESEARCH CONTEXT (if research_reference exists)
+  Research question: [research_reference.research_question]
+  Summary: [phase_summaries.research.summary]
+
+  ## ARTIFACTS TO READ
+  [List relevant files for full details]
+```
+
+**Why**: Subagents run in isolated context. Without summaries, they must re-parse entire files and miss prior decisions.
+
+### Context Extraction
+
+After each phase, extract key findings into `[domain]_context.phase_summaries`:
+
+1. Parse subagent output for key fields
+2. Create 1-2 sentence summary
+3. Update state: `[domain]_context.phase_summaries.[phase_name]`
+
+This enables context passing to downstream phases and supports resume.
+
+**Critical**: Some subagent outputs contain structured fields that control downstream phase logic (e.g., `task_characteristics` from gap-analyzer gates Phase 4 and Phase 10 defaults). These MUST be extracted and written to state immediately — not just summarized. Re-read state after writing to verify the values were stored correctly.
+
+### Decision Enforcement
+
+When a subagent returns `decisions_needed` items, the orchestrator MUST present them to the user via question. Decisions are never silently skipped.
+
+**Anti-Patterns** (NEVER do this):
+
+| Anti-Pattern                                    | Why It's Wrong                                       |
+| ----------------------------------------------- | ---------------------------------------------------- |
+| "I'll accept the recommended defaults"          | User loses control over critical scope decisions     |
+| Logging decisions without asking                | Documentation is not consent                         |
+| "The recommendations are clear, no need to ask" | Clarity is not consent. User may disagree.           |
+| Skipping decisions because task seems simple    | Simple tasks can have non-obvious scope implications |
+
+**Decision Gate Pattern**:
+
+1. **Parse**: Extract all critical and important decisions from subagent output
+2. **Present**: Use `question` for each critical decision; batch important decisions into multi-select
+3. **SELF-CHECK**: "Did I present ALL decisions from `decisions_needed`? If not, STOP."
+
+---
+
+## 4. State Schema
+
+All orchestrators use `orchestrator-state.yml` at `.owflow/tasks/[type]/YYYY-MM-DD-task-name/orchestrator-state.yml`.
+
+### Common Fields
+
+Refer to the template [src/templates/orchestrator-state-base.yml](../../../templates/orchestrator-state-base.yml).
+
+### Extension Pattern
+
+Orchestrators add domain-specific fields using `[domain]_context`:
+
+| Domain      | Context Field         | Example Fields                                     |
+| ----------- | --------------------- | -------------------------------------------------- |
+| Development | `task_context`        | risk_level, ui_heavy, architecture_decision        |
+| Performance | `performance_context` | bottlenecks_identified, user_data_available, bottleneck_priorities, task_characteristics, phase_summaries |
+| Migration   | `migration_context`   | migration_type, target_system, risk_level          |
+| Research    | `research_context`    | research_type, research_question, confidence_level |
+
+See each workflow's state template under `src/templates/` for the full extension schema.
+
+### Shared: research_reference
+
+When development starts from completed research (`--research` flag):
+
+Refer to `research_reference` in the template [src/templates/orchestrator-state-development.yml](../../../templates/orchestrator-state-development.yml).
+
+Research context flows to ALL phases via context passing. Artifacts are also copied to `analysis/research-context/`.
+
+### Shared: verification_context
+
+All orchestrators with verification phases use:
+
+Refer to `verification_context` in the template [src/templates/orchestrator-state-base.yml](../../../templates/orchestrator-state-base.yml) or domain templates.
+
+---
+
+## 5. Initialization & Resume
+
+### Initialization Steps
+
+1. **Parse arguments**: Extract description, type, entry point (`--from`), optional flags
+2. **Determine starting phase**: New task starts Phase 1; resume reads state for first incomplete phase
+3. **Create task directory**: Standard structure with analysis/, implementation/, verification/, documentation/ _(skip on resume)_
+4. **Create state file**: `orchestrator-state.yml` _(skip on resume)_
+   - **CRITICAL**: Use the `verify_template` tool immediately after creation to check YAML validity against the corresponding template.
+5. **Create task items**: `TaskCreate` for all phases, then `TaskUpdate addBlockedBy` for dependencies. On resume, also restore completed phase statuses.
+6. **Output summary**: Show task info, phases, starting message
+
+### Task Name Generation
+
+1. Extract 3-5 key words from description
+2. Convert to lowercase kebab-case
+3. Prepend current date: `YYYY-MM-DD`
+
+Examples: "Fix login timeout bug" → `2025-12-17-fix-login-timeout`
+
+### Task Restoration on Resume
+
+Task system IDs are ephemeral to a session. On resume:
+
+1. Create all phase tasks (same `TaskCreate` loop, all start pending)
+2. Set dependencies (same `TaskUpdate addBlockedBy`)
+3. Mark completed phases (`TaskUpdate` to `completed` with `metadata: {restored: true}`)
+4. Update state with new task IDs
+
+### Resume Logic
+
+1. **Read state file** — Load `orchestrator-state.yml`
+2. **Validate artifacts** — Check expected files for `completed_phases`. If missing, remove from list.
+3. **Find resume point** — First phase not in `completed_phases`
+4. **Check prerequisites** — Verify required artifacts exist
+5. **Restore task items** — Re-create phase tasks and mark completed ones
+
+| Starting From  | Required Prerequisites           |
+| -------------- | -------------------------------- |
+| Gap Analysis   | `analysis/codebase-analysis.md`  |
+| Specification  | `analysis/gap-analysis.md`       |
+| Planning       | `implementation/spec.md`         |
+| Implementation | spec.md + implementation-plan.md |
+| Verification   | Implementation complete          |
+
+If prerequisites missing, use question: "Start from Phase 1", "Specify different phase", or "Exit".
+
+---
+
+## 6. Issue Resolution
+
+**Don't just report issues — resolve them.** Use after verification phases that return structured issues.
+
+### Fix-Then-Reverify Loop
+
+The canonical user-driven contract — option wording, iteration budget, exit conditions, and per-iteration state writes — lives in [Fix Loop Contract](fix-loop-contract.md); skills with a fix phase reference it and document only their deltas. The generic shape:
+
+1. Read verification results (structured issues)
+2. For each issue: trivial/auto-fixable → fix silently, log action; non-trivial → question
+3. If fixes applied → set `skip_test_suite: false` (code changed) → re-run verification
+4. Loop until: passes OR user proceeds with known issues OR max iterations (3)
+
+### Fixability Assessment
+
+| Likely Fixable      | Likely Not Fixable         |
+| ------------------- | -------------------------- |
+| Lint errors         | Architecture decisions     |
+| Formatting issues   | Design trade-offs          |
+| Missing imports     | Test logic errors          |
+| Obvious typos       | Unclear requirements       |
+| Simple config fixes | Performance tuning choices |
+
+### Exit Conditions
+
+| Condition                                | Action                                             |
+| ---------------------------------------- | -------------------------------------------------- |
+| Verification passes                      | Proceed to next phase                              |
+| User chooses "Proceed with known issues" | Proceed with warning logged                        |
+| Max iterations (3) reached               | Ask user how to proceed                            |
+| Critical issues remain unresolved        | **MUST NOT proceed** — require user approval first |
+
+---

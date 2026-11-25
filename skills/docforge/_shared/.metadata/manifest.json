@@ -1,0 +1,48 @@
+{
+  "$schema": "manifest-schema.json",
+  "version": "3.10",
+  "generated_at": "2026-01-01T00:00:00+00:00",
+  "project": {
+    "name": "example",
+    "root": "/path/to/example",
+    "tier": "spine",
+    "scale": {
+      "class": "small",
+      "layout": "standard",
+      "decided_by": "detected",
+      "decided_at": "2026-01-01T00:00:00+00:00",
+      "signals": {
+        "tracked_files": 42,
+        "source_files": 18,
+        "confirmed_profiles": 1,
+        "declared_dependencies": 12,
+        "flow_candidates": 0
+      }
+    },
+    "profiles": {
+      "shapes": [],
+      "platforms": [],
+      "frameworks": [],
+      "concerns": [],
+      "audiences": [
+        "engineers",
+        "beginners"
+      ]
+    },
+    "provenance_storage": "json",
+    "unmanaged_docs": []
+  },
+  "discovery": [],
+  "documents": [],
+  "metadata": {
+    "total_documents": 0,
+    "planned": 0,
+    "in_progress": 0,
+    "generated": 0,
+    "needs_review": 0,
+    "complete": 0,
+    "skipped": 0,
+    "retired": 0,
+    "last_updated": "2026-01-01T00:00:00+00:00"
+  }
+}

@@ -1,0 +1,35 @@
+{
+  "id": "agents_tech_debt",
+  "type": "agents-tech-debt",
+  "summary": "Self-contained known limitations, editing hazards, affected source paths, and safe handling constraints",
+  "contract_file": "content/agent-context/contracts/agents-tech-debt.md",
+  "path": "docs/agents/tech-debt.md",
+  "group": "agent-context",
+  "selection": {
+    "mode": "static",
+    "min_tier": "spine",
+    "selectors": {
+      "audiences": [
+        "coding-agents"
+      ]
+      ,
+      "vendors": []
+    },
+    "condition": null
+  },
+  "instruction_file": "content/agent-context/agents-kernel.instruction.md",
+  "requires": [],
+  "target_depth": "deep-dive",
+  "answer_shape": "lookup",
+  "write_order": 207,
+  "provenance_mode": "sections",
+  "audit_profile": "agent-view",
+  "dominant_form": null,
+  "contract_revision": "3.0.0",
+  "presentation": {
+    "related_docs": "none"
+  },
+  "template_file": "content/agent-context/templates/agents-tech-debt.md",
+  "compact_group": "agents_compact",
+  "compact_order": 5
+}

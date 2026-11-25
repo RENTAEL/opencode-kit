@@ -1,0 +1,64 @@
+{
+  "id": "arch_low_level",
+  "type": "architecture-low-level",
+  "summary": "Module/component responsibilities and their interfaces (or, for `infrastructure-platform`, resource-group / stack responsibilities and apply order); one...",
+  "contract_file": "content/architecture/contracts/architecture-low-level.md",
+  "path": "docs/architecture/low-level.md",
+  "group": "architecture",
+  "selection": {
+    "mode": "static",
+    "min_tier": "diligence",
+    "selectors": {},
+    "condition": null
+  },
+  "instruction_file": "content/architecture/instructions.md",
+  "requires": [
+    "code_graph"
+  ],
+  "target_depth": "deep-dive",
+  "answer_shape": "answer-first",
+  "write_order": 11,
+  "nav_order": 23,
+  "provenance_mode": "sections",
+  "audit_profile": "architecture",
+  "dominant_form": "sequenceDiagram",
+  "model_depth": {
+    "c4": "component-evidence",
+    "arc42": "runtime-scenarios",
+    "mermaid": "annotated"
+  },
+  "contract_revision": "3.0.0",
+  "template_file": "content/architecture/templates/architecture-low-level.md",
+  "compact_group": "architecture_compact",
+  "compact_order": 3,
+  "illustration_views": [
+    {
+      "form": "text",
+      "section": "Layout",
+      "question": "how is the source grouped, and what does each group own"
+    },
+    {
+      "form": "flowchart",
+      "section": "Components",
+      "question": "which components sit inside this whitebox, and which direction may they depend",
+      "depth": "working"
+    },
+    {
+      "form": "flowchart",
+      "section": "Module wiring",
+      "question": "which components talk across whitebox boundaries, and which high-level relationship each edge realizes",
+      "depth": "working"
+    },
+    {
+      "form": "sequenceDiagram",
+      "section": "Runtime scenario",
+      "question": "in what order do components collaborate on one architecturally relevant path"
+    },
+    {
+      "form": "erDiagram",
+      "section": "Data model",
+      "question": "which durable entities does this decomposition touch, and how do they relate",
+      "required": false
+    }
+  ]
+}

@@ -1,0 +1,40 @@
+name: django-dev-pro
+version: 1.0.0
+description: Use ONLY when working with Django or Django REST Framework projects to generate models, dual serializers, ViewSets, tests, fixtures, documentation, manage environments, and run/fix tests following project patterns.
+author: djcrespo
+repository: https://github.com/djcrespo/django-skill
+
+keywords:
+  - django
+  - django-rest-framework
+  - drf
+  - code-generation
+  - models
+  - serializers
+  - viewsets
+  - testing
+  - automation
+  - python
+
+capabilities:
+  - Generate Django models following project patterns
+  - Create dual serializers (Write + Read)
+  - Generate ViewSets with permissions
+  - Auto-generate tests
+  - Run and fix tests automatically
+  - Generate documentation
+  - Manage project-specific commands
+  - Load environment variables
+  - Create test fixtures
+
+supported_frameworks:
+  - Django REST Framework
+
+supported_python_versions:
+  - "3.10"
+  - "3.11"
+  - "3.12"
+
+dependencies:
+  - django >= 5.0
+  - djangorestframework >= 3.14

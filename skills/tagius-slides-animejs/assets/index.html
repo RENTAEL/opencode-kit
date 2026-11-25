@@ -1,0 +1,46 @@
+<!--
+  HTML shell for the slides-animejs bundle. `scripts/build.py` replaces
+  {{TITLE}} and injects `window.__SLIDES__` inline just before overlay.js.
+-->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>{{TITLE}}</title>
+  <link rel="stylesheet" href="assets/slides.css" />
+  <link rel="stylesheet" href="assets/overlay.css" />
+</head>
+<body>
+  <div class="stage">
+    <div class="slide-frame" id="slideFrame"></div>
+  </div>
+
+  <div class="overlay" id="overlay">
+    <div class="overlay-top">
+      <div class="progress-bar"><div class="progress-fill" id="progressFill"></div></div>
+    </div>
+    <div class="overlay-bottom">
+      <button class="ov-btn" id="btnPrev" aria-label="Previous slide">◀</button>
+      <div class="ov-counter"><span id="slideIdx">1</span> / <span id="slideTotal">N</span></div>
+      <button class="ov-btn" id="btnNext" aria-label="Next slide">▶</button>
+      <button class="ov-btn" id="btnGrid" aria-label="Overview">▦</button>
+      <button class="ov-btn" id="btnFull" aria-label="Fullscreen">⛶</button>
+      <button class="ov-btn" id="btnNotes" aria-label="Speaker notes">📝</button>
+    </div>
+  </div>
+
+  <aside class="notes-panel hidden" id="notesPanel">
+    <h3>Speaker notes</h3>
+    <div id="notesBody"></div>
+  </aside>
+
+  <div class="grid-view hidden" id="gridView"></div>
+
+  <!-- slide manifest injected by build.py -->
+  <script>
+    window.__SLIDES__ = {{SLIDES_JSON}};
+  </script>
+  <script type="module" src="assets/overlay.js"></script>
+</body>
+</html>

@@ -1,0 +1,56 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/latif-erdogdu/academic-thesis-writer/schemas/finding.json",
+  "title": "Bulgu",
+  "description": "Veriden cikarilan, tek bir arastirma sorusuna cevap veren olgusal sonuc.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["id", "rq_id", "statement", "evidence_ids"],
+  "examples": [
+    {
+      "$comment": "KURGUSAL ORNEK. Metin uydurmadir.",
+      "id": "FND-001",
+      "rq_id": "RQ-001",
+      "statement": "Kurgusal ornek bulgu.",
+      "finding_type": "quantitative",
+      "evidence_ids": ["EVD-001"],
+      "statistic_ids": ["STAT-001"],
+      "analysis_ids": ["ANL-001"],
+      "dataset_ids": ["DS-001"],
+      "supported_claim_ids": ["CLM-001"],
+      "contradicts_claim_ids": [],
+      "direction": "supported",
+      "notes": ""
+    }
+  ],
+  "properties": {
+    "$comment": { "type": "string" },
+    "id": { "type": "string", "pattern": "^FND-\\d{3,}$" },
+    "rq_id": { "type": "string", "pattern": "^RQ-\\d{3,}$" },
+    "statement": { "type": "string", "minLength": 1 },
+    "finding_type": {
+      "enum": ["quantitative", "qualitative", "mixed", "theoretical", "descriptive"]
+    },
+    "evidence_ids": {
+      "type": "array", "minItems": 1,
+      "items": { "type": "string", "pattern": "^EVD-\\d{3,}$" }
+    },
+    "statistic_ids": {
+      "type": "array", "items": { "type": "string", "pattern": "^STAT-\\d{3,}$" }
+    },
+    "analysis_ids": {
+      "type": "array", "items": { "type": "string", "pattern": "^ANL-\\d{3,}$" }
+    },
+    "dataset_ids": {
+      "type": "array", "items": { "type": "string", "pattern": "^DS-\\d{3,}$" }
+    },
+    "supported_claim_ids": {
+      "type": "array", "items": { "type": "string", "pattern": "^CLM-\\d{3,}$" }
+    },
+    "contradicts_claim_ids": {
+      "type": "array", "items": { "type": "string", "pattern": "^CLM-\\d{3,}$" }
+    },
+    "direction": { "enum": ["supported", "refuted", "mixed", "inconclusive"] },
+    "notes": { "type": "string" }
+  }
+}

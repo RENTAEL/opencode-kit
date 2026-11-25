@@ -1,0 +1,28 @@
+{
+  "id": "conventions",
+  "type": "conventions",
+  "summary": "Evidenced style, structure, error, testing, and review conventions",
+  "contract_file": "content/engineering/contracts/conventions.md",
+  "path": "docs/engineering/conventions.md",
+  "group": "engineering",
+  "selection": {
+    "mode": "static",
+    "min_tier": "diligence",
+    "selectors": {},
+    "condition": "conventions_source"
+  },
+  "instruction_file": "content/engineering/instructions.md",
+  "requires": [
+    "manifests"
+  ],
+  "target_depth": "deep-dive",
+  "answer_shape": "lookup",
+  "write_order": 53,
+  "provenance_mode": "sections",
+  "audit_profile": "standard",
+  "dominant_form": null,
+  "contract_revision": "3.0.0",
+  "template_file": "content/engineering/templates/conventions.md",
+  "compact_group": "engineering_compact",
+  "compact_order": 4
+}

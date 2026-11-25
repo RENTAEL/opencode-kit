@@ -1,0 +1,30 @@
+{
+  "id": "epics_index",
+  "type": "folder-index",
+  "title": "Epics",
+  "summary": "Portfolio epics overview: what epics are and the reader question each epic answers",
+  "contract_file": "content/shared/folder-index.contract.md",
+  "path": "docs-portfolio/epics/README.md",
+  "group": "portfolio",
+  "selection": {
+    "mode": "static",
+    "min_tier": "portfolio",
+    "selectors": {},
+    "condition": null,
+    "requires_children": [
+      "epic"
+    ]
+  },
+  "instruction_file": "content/shared/folder-index.instruction.md",
+  "requires": [
+    "git_history"
+  ],
+  "target_depth": "orientation",
+  "answer_shape": "router",
+  "write_order": 102,
+  "provenance_mode": "sections",
+  "audit_profile": "portfolio",
+  "dominant_form": null,
+  "template_file": "content/shared/section-readme.template.md",
+  "contract_revision": "3.0.0"
+}

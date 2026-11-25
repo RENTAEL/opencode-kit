@@ -1,0 +1,38 @@
+# Dependencies
+node_modules/
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Environment / secrets
+.env
+.env.*
+!.env.example
+
+# OS cruft
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Editors / IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OpenChamber browser/session artifacts (screenshots, images)
+.openchamber/
+.opencode/
+
+# Local-only personal agent instructions (not for the public repo)
+/AGENTS.md
+
+# Local-only Chinese reading copy of SKILL.md
+zh/skill-zh.md
+
+# Local-only general repository-init preferences guide
+zh/repo-init-guide-zh.md

@@ -1,0 +1,35 @@
+{
+  "id": "agents_flow",
+  "type": "agents-flow",
+  "summary": "Self-contained trigger-to-effect flow lookup grounded in declared flow evidence",
+  "contract_file": "content/agent-context/contracts/agents-flow.md",
+  "path": "docs/agents/flow.md",
+  "group": "agent-context",
+  "selection": {
+    "mode": "static",
+    "min_tier": "spine",
+    "selectors": {
+      "audiences": [
+        "coding-agents"
+      ]
+    },
+    "condition": null
+  },
+  "instruction_file": "content/agent-context/agents-kernel.instruction.md",
+  "requires": [
+    "flow_graph"
+  ],
+  "target_depth": "reference",
+  "answer_shape": "lookup",
+  "write_order": 208,
+  "provenance_mode": "sections",
+  "audit_profile": "agent-view",
+  "dominant_form": null,
+  "contract_revision": "3.0.0",
+  "presentation": {
+    "related_docs": "none"
+  },
+  "template_file": "content/agent-context/templates/agents-flow.md",
+  "compact_group": "agents_compact",
+  "compact_order": 6
+}

@@ -1,0 +1,35 @@
+{
+  "id": "performance_budgets",
+  "type": "performance-budgets",
+  "summary": "Evidenced CPU/GPU/memory/storage/timing limits, measurement, degradation",
+  "contract_file": "content/reference/contracts/performance-budgets.md",
+  "path": "docs/reference/performance-budgets.md",
+  "group": "reference",
+  "selection": {
+    "mode": "static",
+    "min_tier": "spine",
+    "selectors": {
+      "shapes": [
+        "game",
+        "embedded-iot"
+      ]
+    },
+    "condition": null
+  },
+  "instruction_file": "content/reference/instructions.md",
+  "requires": [
+    "code_graph",
+    "manifests"
+  ],
+  "target_depth": "reference",
+  "answer_shape": "lookup",
+  "write_order": 68,
+  "nav_order": 71,
+  "provenance_mode": "sections",
+  "audit_profile": "risk",
+  "dominant_form": "table",
+  "contract_revision": "3.0.0",
+  "template_file": "content/reference/templates/performance-budgets.md",
+  "compact_group": "reference_compact",
+  "compact_order": 22
+}

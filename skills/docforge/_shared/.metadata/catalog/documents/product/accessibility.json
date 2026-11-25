@@ -1,0 +1,33 @@
+{
+  "id": "accessibility",
+  "type": "accessibility",
+  "summary": "Supported behavior, resources/semantics, fallback, verification, known limits",
+  "contract_file": "content/product/contracts/accessibility.md",
+  "path": "docs/product/accessibility.md",
+  "group": "product",
+  "selection": {
+    "mode": "static",
+    "min_tier": "spine",
+    "selectors": {
+      "concerns": [
+        "accessibility"
+      ]
+    },
+    "condition": null
+  },
+  "instruction_file": "content/product/instructions.md",
+  "requires": [
+    "code_graph",
+    "manifests"
+  ],
+  "target_depth": "deep-dive",
+  "answer_shape": "coverage-matrix",
+  "write_order": 42,
+  "provenance_mode": "sections",
+  "audit_profile": "standard",
+  "dominant_form": "table",
+  "contract_revision": "3.0.0",
+  "template_file": "content/product/templates/accessibility.md",
+  "compact_group": "product_compact",
+  "compact_order": 14
+}

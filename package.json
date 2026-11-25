@@ -1,0 +1,10 @@
+{
+  "name": "opencode-kit",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Portable skills + plugins payload for OpenCode. Installed by install.ps1.",
+  "dependencies": {
+    "@opencode-ai/plugin": "^1.19.5",
+    "oh-my-openagent": "^5.1.57"
+  }
+}

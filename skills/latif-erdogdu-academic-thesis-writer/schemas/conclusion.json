@@ -1,0 +1,62 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/latif-erdogdu/academic-thesis-writer/schemas/conclusion.json",
+  "title": "Sonuc",
+  "description": "Tezin sorularini, katkisini ve sinirliliklarini kapatan kapanis kaydi.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["id", "rq_ids", "finding_ids", "contribution", "limitations"],
+  "examples": [
+    {
+      "$comment": "KURGUSAL ORNEK. Metin uydurmadir.",
+      "id": "CON-001",
+      "rq_ids": ["RQ-001"],
+      "finding_ids": ["FND-001"],
+      "discussion_ids": ["DSC-001"],
+      "hypothesis_outcomes": [
+        { "hypothesis_id": "HYP-001", "outcome": "supported" }
+      ],
+      "contribution": "Kurgusal ornek katki.",
+      "theoretical_contribution": "",
+      "practical_contribution": "",
+      "limitations": ["Kurgusal ornek sinirlilik."],
+      "recommendations": [],
+      "future_research": []
+    }
+  ],
+  "properties": {
+    "$comment": { "type": "string" },
+    "id": { "type": "string", "pattern": "^CON-\\d{3,}$" },
+    "rq_ids": {
+      "type": "array", "minItems": 1,
+      "items": { "type": "string", "pattern": "^RQ-\\d{3,}$" }
+    },
+    "finding_ids": {
+      "type": "array", "minItems": 1,
+      "items": { "type": "string", "pattern": "^FND-\\d{3,}$" }
+    },
+    "discussion_ids": {
+      "type": "array", "items": { "type": "string", "pattern": "^DSC-\\d{3,}$" }
+    },
+    "hypothesis_outcomes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["hypothesis_id", "outcome"],
+        "properties": {
+          "hypothesis_id": { "type": "string", "pattern": "^HYP-\\d{3,}$" },
+          "outcome": { "enum": ["supported", "rejected", "inconclusive", "not_tested"] }
+        }
+      }
+    },
+    "contribution": { "type": "string", "minLength": 1 },
+    "theoretical_contribution": { "type": "string" },
+    "practical_contribution": { "type": "string" },
+    "limitations": {
+      "type": "array", "minItems": 1, "items": { "type": "string", "minLength": 1 }
+    },
+    "recommendations": { "type": "array", "items": { "type": "string" } },
+    "future_research": { "type": "array", "items": { "type": "string" } }
+  }
+}

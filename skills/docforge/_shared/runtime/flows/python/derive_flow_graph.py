@@ -1,0 +1,515 @@
+#!/usr/bin/env python3
+"""Docforge's own flow-graph derivation — build a provisional flow graph
+from an existing code graph when no native flow graph is available.
+
+Docforge needs a flow graph only for selected manifest documents that declare
+the `flow_graph` capability. When a source supplies one natively (an
+understand-anything flow graph, or GitNexus's native processes) docforge uses
+that. When none exists — a code-graph-only source with no flow data — docforge
+derives one *from the code graph it already has*, grounded in the graph and
+never invented, and writes it to .docforge/tmp/flow-graph.json: provisional,
+git-ignored, regenerated each run, never committed.
+
+The reasoning step is agent-mediated (a script cannot infer business domains).
+After `flow_index harvest|revise`, prefer the compact pack: main-priority rows
+from `.docforge/flow-index.json`, `.docforge/tmp/communities.md` (deduped
+labels), and this prepare context when no native flow graph exists:
+
+    python derive_flow_graph.py prepare --repo <path>
+    # -> writes .docforge/tmp/flow-context.json (compact code-graph digest)
+    # The agent analyzes main-priority flows per references/graph/flow-derivation.md
+    # into .docforge/tmp/flow-analysis.json (or another --analysis path).
+    python derive_flow_graph.py write --repo <path> --analysis <analysis.json>
+    # -> validates and writes .docforge/tmp/flow-graph.json (+ .gitignore)
+
+Docforge's flow shape:
+    { "derived": true, "source": "<code-graph source>",
+      "generatedFrom": "<code-graph path>", "generatedAt": "<iso>",
+      "flows": [ { "name", "domain"?, "entryPoint"?,
+                   "steps": [ { "order", "name", "path"? } ] } ] }
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+
+from runtime.graph.python.graph_storage import ensure_tmp_dir_gitignored, validate_flow_graph_shape, write_flow_graph
+from runtime.graph.python.graph_source_registry import read_graph_lock, resolve_all_ready, resolve_locked
+from runtime.flows.python.budgets import max_flows_for
+
+TMP_REL = ".docforge/tmp"
+CONTEXT_NAME = "flow-context.json"
+
+# Main-flow budget and traversal radius for the entry-point-first strategy.
+DEFAULT_MAX_FLOWS = 15
+# A real request path is route -> controller -> service -> model -> client.
+# Three hops truncated most flows mid-way; six reaches the terminal on the
+# repos this was measured against.
+DEFAULT_HOPS = 6
+
+# Loose key probing — the code-graph schema varies by source, so search rather
+# than assume (mirrors read_graph.py's tolerance).
+NODE_KEYS = ["nodes", "files", "entities", "items"]
+EDGE_KEYS = ["edges", "links", "relationships", "relations"]
+ID_KEYS = ["id", "nodeId", "key", "name"]
+PATH_KEYS = ["path", "filePath", "file", "relativePath", "location"]
+LABEL_KEYS = ["name", "label", "title", "symbol"]
+KIND_KEYS = ["type", "kind", "nodeType", "category"]
+SUMMARY_KEYS = ["summary", "description", "explanation", "doc"]
+SRC_KEYS = ["source", "from", "src", "start"]
+DST_KEYS = ["target", "to", "dst", "end"]
+EDGEKIND_KEYS = ["type", "kind", "relation", "label"]
+# Edge kinds that carry flow/structure signal for the analyzer. `reference`
+# earns its place: in a route-based codebase the route reaches its handler
+# through a `references` edge, so omitting it broke every request chain at hop
+# zero. `instantiate` and `dispatch` cover the same gap in OO and event codebases.
+FLOW_EDGE_HINTS = ("call", "import", "handle", "route", "step", "entry",
+                   "reference", "instantiate", "dispatch")
+
+
+def first_present(node: dict, keys: list[str]):
+    for key in keys:
+        if isinstance(node, dict) and key in node and node[key] not in (None, ""):
+            return node[key]
+    return None
+
+
+def locate_collection(doc, keys: list[str], depth: int = 3):
+    if not isinstance(doc, dict) or depth < 0:
+        return []
+    for key in keys:
+        value = doc.get(key)
+        if isinstance(value, list) and (not value or isinstance(value[0], dict)):
+            return value
+        if isinstance(value, dict):
+            entries = list(value.values())
+            if entries and isinstance(entries[0], dict):
+                return entries
+    for value in doc.values():
+        if isinstance(value, dict):
+            found = locate_collection(value, keys, depth - 1)
+            if found:
+                return found
+    return []
+
+
+def load_json(path: Path):
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        raise ValueError(f"file not found: {path}")
+    except json.JSONDecodeError as error:
+        raise ValueError(f"invalid JSON in {path}: {error}")
+
+
+def _slim_nodes(nodes: list) -> tuple[list, dict]:
+    """Normalize source nodes to docforge's slim shape and index them by id."""
+    slim = []
+    by_id = {}
+    for node in nodes:
+        nid = first_present(node, ID_KEYS)
+        record = {
+            "id": nid,
+            "name": first_present(node, LABEL_KEYS),
+            "type": first_present(node, KIND_KEYS),
+            "path": first_present(node, PATH_KEYS),
+            "summary": first_present(node, SUMMARY_KEYS),
+        }
+        slim.append(record)
+        if nid is not None:
+            by_id[str(nid)] = record
+    return slim, by_id
+
+
+def _flow_edges(edges: list) -> list:
+    """Keep only edges that carry flow/structure signal, in slim shape."""
+    slim = []
+    for edge in edges:
+        kind = str(first_present(edge, EDGEKIND_KEYS) or "").lower()
+        if not any(hint in kind for hint in FLOW_EDGE_HINTS):
+            continue
+        slim.append({
+            "source": first_present(edge, SRC_KEYS),
+            "target": first_present(edge, DST_KEYS),
+            "type": first_present(edge, EDGEKIND_KEYS),
+        })
+    return slim
+
+
+def _bounded_cluster(seed_id, adjacency: dict, by_id: dict, hops: int) -> list:
+    """Breadth-first walk from a seed over flow edges, collecting node ids
+    reachable within `hops` hops (the seed's flow neighbourhood). Nodes are
+    returned in BFS-visit order — deterministic, and identical to the Node
+    twin's insertion-ordered Set (do not iterate a Python set here: its order
+    is hash-based and would break py/js parity)."""
+    seen = {str(seed_id)}
+    order = [str(seed_id)]
+    frontier = [str(seed_id)]
+    for _ in range(max(hops, 0)):
+        nxt = []
+        for nid in frontier:
+            for target in adjacency.get(nid, ()):  # outgoing flow edges only
+                if target not in seen:
+                    seen.add(target)
+                    order.append(target)
+                    nxt.append(target)
+        frontier = nxt
+        if not frontier:
+            break
+    return [by_id[nid] for nid in order if nid in by_id]
+
+
+def _entry_point_context(doc, seeds, source, path, repo, max_flows, hops) -> dict:
+    """Entry-point-first context: the top `max_flows` seeds, each with its
+    bounded flow neighbourhood — dozens of nodes per flow, not the whole graph."""
+    slim, by_id = _slim_nodes(locate_collection(doc, NODE_KEYS))
+    edges = _flow_edges(locate_collection(doc, EDGE_KEYS))
+    adjacency: dict = {}
+    for edge in edges:
+        src, dst = edge["source"], edge["target"]
+        if src is not None and dst is not None:
+            adjacency.setdefault(str(src), []).append(str(dst))
+
+    main = seeds[:max_flows]
+    clusters = []
+    for seed in main:
+        cluster_nodes = _bounded_cluster(seed["id"], adjacency, by_id, hops)
+        cluster_ids = {str(n["id"]) for n in cluster_nodes}
+        cluster_edges = [e for e in edges
+                         if str(e["source"]) in cluster_ids and str(e["target"]) in cluster_ids]
+        clusters.append({
+            "entryPoint": {"id": seed["id"], "name": seed["name"],
+                           "kind": seed["kind"], "path": seed["path"]},
+            "rank": seed["rank"],
+            "nodes": cluster_nodes,
+            "edges": cluster_edges,
+        })
+    return {
+        "strategy": "entry-point-first",
+        "generatedFrom": str(path),
+        "source": source["name"] if source else None,
+        "repo": repo.resolve().name,
+        "maxFlows": max_flows,
+        "hops": hops,
+        "entryPointCount": len(seeds),
+        "mainFlows": len(main),
+        "tail": max(len(seeds) - len(main), 0),
+        "clusters": clusters,
+    }
+
+
+def _flat_context(doc, source, path, repo) -> dict:
+    """Fallback: the whole flow-signal graph in one dump (pre-entry-point
+    behaviour), used only when no entry-point signal is available."""
+    slim, _ = _slim_nodes(locate_collection(doc, NODE_KEYS))
+    edges = _flow_edges(locate_collection(doc, EDGE_KEYS))
+    layers = doc.get("layers") if isinstance(doc.get("layers"), list) else []
+    return {
+        "strategy": "flat-fallback",
+        "generatedFrom": str(path),
+        "source": source["name"] if source else None,
+        "repo": repo.resolve().name,
+        "nodeCount": len(slim),
+        "edgeCount": len(edges),
+        "nodes": slim,
+        "edges": edges,
+        "layers": layers,
+    }
+
+
+def _native_interface_context(source, path, repo, read_mode) -> dict:
+    """A DB/MCP source whose graph is not a JSON file docforge can load. It is
+    never text-loaded here (that is the crash fix) — instead the agent reads it
+    through the source's native interface. For CodeGraph (mcp): find entry
+    points and codegraph_explore each. For a source with native flows
+    (GitNexus): read those directly, do not derive."""
+    return {
+        "strategy": "mcp-explore" if read_mode == "mcp" else "native-interface",
+        "generatedFrom": str(path),
+        "source": source["name"] if source else None,
+        "repo": repo.resolve().name,
+        "readMode": read_mode,
+        "instruction": (
+            "This source's graph is not a JSON file docforge parses; do NOT dump "
+            "the whole graph. Resolve flows entry-point-first through the source's "
+            "native interface (references/graph/flow-derivation.md): "
+            + ("for CodeGraph, use the codegraph MCP to rank entry points "
+               "(route nodes, then exported functions with no incoming call, then "
+               "call fan-out) and run codegraph_explore once per main entry point, "
+               "documenting the top flows first."
+               if read_mode == "mcp" else
+               "read the source's native flows/processes directly and rank them "
+               "main-first (e.g. GitNexus: cross_community processes, then step "
+               "count); do not derive what the source already models.")
+        ),
+    }
+
+
+# How the provider was chosen, for the context file and the report. Sharing one
+# vocabulary between resolve_locked, the JSON, and stdout keeps them from drifting.
+ORIGIN_LABELS = {
+    "lock": "session lock",
+    "priority": "registry priority, no lock recorded",
+}
+
+
+def _with_origin(context: dict, origin: str) -> dict:
+    """Record how the provider was chosen, right beside which one it was. A lock
+    is only trustworthy if a run can be seen to have honored it."""
+    context["sourceOrigin"] = origin
+    return context
+
+
+def _stale_lock_message(repo: Path, provider: str) -> str:
+    """A locked provider whose graph has left the disk. Hard-fail rather than
+    quietly deriving from a provider the user declined: the provider decides the
+    read_mode and the entry-point seeds, so falling back would silently change
+    the shape of the analysis mid-session, and every document already written
+    carries the locked provider in its provenance."""
+    lines = [
+        f"graph provider '{provider}' is locked for this session in "
+        ".docforge/manifest.json, but its graph is not on disk (moved, deleted, "
+        "or never built).",
+    ]
+    ready = [src["name"] for src, _ in resolve_all_ready(repo, "code_graph")]
+    if ready:
+        lines.append(f"Ready now: {', '.join(ready)}.")
+        lines.append(
+            "Rebuild the locked graph, or relock deliberately: "
+            f"manage_manifest.py set-graph --repo <repo> --provider {ready[0]} --force"
+        )
+    else:
+        lines.append(
+            "No provider is ready — run precheck_graph.py --need code for how to "
+            "build one, then relock with set-graph --force if you change provider."
+        )
+    return " ".join(lines)
+
+
+def build_context(repo: Path, max_flows: int, hops: int) -> dict:
+    """Resolve the code graph and build the analyzer context, dispatched on the
+    source's read_mode. Only a JSON source is ever text-loaded here — a db/mcp
+    source is routed to its native interface, so a binary graph never reaches a
+    JSON reader (the crash fix).
+
+    The provider comes from the session lock, not registry priority: the user
+    already answered which graph to use and `init` recorded it, so re-detecting
+    here would analyze a provider they declined (references/graph/graph-sources.md
+    "Session persistence")."""
+    source, path, origin = resolve_locked(repo, "code_graph")
+    if origin == "lock-stale":
+        lock = read_graph_lock(repo)
+        raise ValueError(_stale_lock_message(repo, str(lock["provider"]) if lock else "unknown"))
+    if not path:
+        raise ValueError(
+            "no code graph found — derivation needs one to work from. Run "
+            "precheck_graph.py --need code for how to build it."
+        )
+    read_mode = source.get("read_mode") if source else "json"
+    entry_fn = source.get("entry_points") if source else None
+
+    if read_mode == "json":
+        doc = load_json(path)
+        seeds = entry_fn(repo) if entry_fn else []
+        if seeds:
+            return _with_origin(
+                _entry_point_context(doc, seeds, source, path, repo, max_flows, hops), origin
+            )
+        return _with_origin(_flat_context(doc, source, path, repo), origin)
+
+    # db / mcp: binary graph — never load_json it.
+    seeds = entry_fn(repo) if entry_fn else []
+    if seeds:
+        # An offline seed reader is available for this DB source. Where that
+        # reader can also walk ordered chains, ship the chains: handing the
+        # analyzer a bare seed list is what left it inventing step order.
+        main = seeds[:max_flows]
+        clusters = _reader_clusters(source, repo, main, hops)
+        context = {
+            "strategy": "entry-point-first",
+            "generatedFrom": str(path),
+            "source": source["name"] if source else None,
+            "repo": repo.resolve().name,
+            "maxFlows": max_flows,
+            "hops": hops,
+            "entryPointCount": len(seeds),
+            "mainFlows": len(main),
+            "tail": max(len(seeds) - max_flows, 0),
+            "entryPoints": main,
+        }
+        if clusters:
+            context["clusters"] = clusters
+            context["note"] = (
+                "Each cluster's `paths` are ordered call chains read from the "
+                "source, every hop carrying file and line — use them as the step "
+                "skeleton. Confirm actors, branches, rules, and failures against "
+                "source (or codegraph_explore) before writing; the graph gives "
+                "structure, not business meaning."
+            )
+        else:
+            context["note"] = (
+                "Seeds read offline; spread each via the source's reader or MCP, "
+                "main flows first (references/graph/flow-derivation.md)."
+            )
+        return _with_origin(context, origin)
+    return _with_origin(_native_interface_context(source, path, repo, read_mode), origin)
+
+
+def _reader_clusters(source, repo: Path, seeds: list, hops: int) -> list:
+    """Ordered call chains per seed, when the source exposes a path reader.
+
+    Only CodeGraph supplies one today. A source without it still gets a seed
+    list, which is what it had before — this never fails the prepare step."""
+    if not source or source.get("name") != "codegraph":
+        return []
+    try:
+        from runtime.graph.python.graph_source_codegraph_reader import ordered_paths
+    except ImportError:
+        return []
+    clusters = []
+    for seed in seeds:
+        chains = ordered_paths(repo, seed["id"], hops)
+        clusters.append({
+            "entryPoint": {"id": seed["id"], "name": seed.get("name"),
+                           "kind": seed.get("kind"), "path": seed.get("path"),
+                           "line": seed.get("line")},
+            "rank": seed.get("rank"),
+            "paths": chains,
+        })
+    return clusters
+
+
+def _source_label(context: dict) -> str:
+    """`<name> [<how it was chosen>]` — one helper so the three strategy branches
+    and both runtimes cannot drift on the wording."""
+    label = ORIGIN_LABELS.get(context.get("sourceOrigin", ""))
+    return f"{context['source']} [{label}]" if label else str(context["source"])
+
+
+def _report_prepare(context: dict) -> None:
+    strategy = context.get("strategy")
+    if strategy == "entry-point-first":
+        print(f"Strategy: entry-point-first — {context.get('mainFlows')} main flow(s) "
+              f"of {context.get('entryPointCount')} entry points "
+              f"({context.get('tail')} in the tail), source: {_source_label(context)}")
+    elif strategy == "flat-fallback":
+        print(f"Strategy: flat-fallback (no entry-point signal) — "
+              f"{context.get('nodeCount')} nodes, {context.get('edgeCount')} "
+              f"flow-signal edges, source: {_source_label(context)}")
+    else:
+        print(f"Strategy: {strategy} — read via the source's native interface, "
+              f"source: {_source_label(context)} (no graph dumped)")
+    if context.get("sourceOrigin") == "priority":
+        # The self-heal path graph-sources.md documents: a manifest written before
+        # the lock existed, or a run before init.
+        print("Note: no provider is locked in manifest[\"graph\"]; this pick is "
+              "registry priority. Pin it with `manage_manifest.py set-graph "
+              "--repo <repo>`.")
+
+
+def run_prepare(args: argparse.Namespace) -> int:
+    try:
+        context = build_context(args.repo, max_flows_for(args.repo, args.max_flows), args.hops)
+    except ValueError as error:
+        print(f"PREPARE FAILED: {error}", file=sys.stderr)
+        return 1
+    ensure_tmp_dir_gitignored(args.repo)
+    out = args.repo.resolve() / TMP_REL / CONTEXT_NAME
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(json.dumps(context, indent=2) + "\n", encoding="utf-8")
+    print(f"Wrote {out}")
+    _report_prepare(context)
+    print("Next: dispatch the Docforge flow analyzer on this context, main flows "
+          "first (references/graph/flow-derivation.md), save its JSON, then run:")
+    print(f"    python runtime/cli/python/derive_flow_graph.py write --repo {args.repo} --analysis <analysis.json>")
+    return 0
+
+
+def run_write(args: argparse.Namespace) -> int:
+    try:
+        analysis = load_json(args.analysis)
+    except ValueError as error:
+        print(f"WRITE FAILED: {error}", file=sys.stderr)
+        return 1
+
+    if not isinstance(analysis, dict):
+        print("WRITE FAILED: analysis must be a JSON object with a 'flows' list", file=sys.stderr)
+        return 1
+
+    context_src = None
+    context_path = None
+    context_origin = None
+    context_file = args.repo.resolve() / TMP_REL / CONTEXT_NAME
+    if context_file.is_file():
+        try:
+            context = json.loads(context_file.read_text(encoding="utf-8"))
+            context_src = context.get("source")
+            context_path = context.get("generatedFrom")
+            context_origin = context.get("sourceOrigin")
+        except (OSError, json.JSONDecodeError):
+            pass
+
+    flow_graph = {
+        "derived": True,
+        "source": analysis.get("source") or context_src,
+        "generatedFrom": analysis.get("generatedFrom") or context_path,
+        "generatedAt": datetime.now(timezone.utc).isoformat(),
+        "flows": analysis.get("flows"),
+    }
+    # Free provenance on a provisional artifact whose whole risk is "which
+    # provider did this actually come from".
+    if context_origin:
+        flow_graph["sourceOrigin"] = context_origin
+    if "domains" in analysis:
+        flow_graph["domains"] = analysis["domains"]
+
+    error = validate_flow_graph_shape(flow_graph)
+    if error:
+        print(f"WRITE FAILED: {error}. The analyzer must return a non-empty "
+              "'flows' list — if the code graph evidences no flows, do not "
+              "write an empty graph (see references/graph/flow-derivation.md).",
+              file=sys.stderr)
+        return 1
+
+    ensure_tmp_dir_gitignored(args.repo)
+    path = write_flow_graph(args.repo, flow_graph, dest_rel=TMP_REL)
+    print(f"Wrote {path} ({len(flow_graph['flows'])} flows, provisional/derived — never committed)")
+    print("Re-run precheck_graph.py --need flow to confirm READY.")
+    return 0
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    sub = ap.add_subparsers(dest="command", required=True)
+
+    p_prepare = sub.add_parser("prepare", help="emit an entry-point-first code-graph digest for the analyzer")
+    p_prepare.add_argument("--repo", required=True, type=Path)
+    p_prepare.add_argument("--max-flows", type=int, default=None,
+                           help="main-flow budget: how many top entry points to expand; "
+                                "scale-aware default — small 15, medium 30, large 50 "
+                                f"(fallback {DEFAULT_MAX_FLOWS}); --max-flows overrides; "
+                                "the rest are the tail")
+    p_prepare.add_argument("--hops", type=int, default=DEFAULT_HOPS,
+                           help=f"how many call/contains hops to spread from each entry "
+                                f"point (default {DEFAULT_HOPS})")
+    p_prepare.set_defaults(func=run_prepare)
+
+    p_write = sub.add_parser("write", help="validate the analyzer output and write the derived flow graph")
+    p_write.add_argument("--repo", required=True, type=Path)
+    p_write.add_argument("--analysis", required=True, type=Path)
+    p_write.set_defaults(func=run_write)
+
+    args = ap.parse_args()
+    if not args.repo.is_dir():
+        print(f"Not a directory: {args.repo}", file=sys.stderr)
+        return 2
+    return args.func(args)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -1,0 +1,273 @@
+"use strict";
+/** Manifest-scoped isolation checks for generated agent-context output.
+ *
+ * Human-facing output must not reference an active agent-context output.
+ * Agent-context output is stricter: it must not contain Markdown links, raw
+ * URLs, document imports, or bare references to managed documents and agent
+ * outputs. Both checks inspect comments and fenced examples.
+ */
+
+const path = require("path");
+
+const AGENT_CONTEXT_GROUP = "agent-context";
+const INACTIVE_STATUSES = new Set(["skipped", "retired"]);
+const MARKDOWN_LINK_RE = /!?\[([^\]\r\n]*)\]\(([^)\r\n]*)\)/g;
+const RAW_URL_RE = /\bhttps?:\/\/[^\s<>)\]"']+/g;
+const AT_IMPORT_RE = /(?<![\w@])@((?:(?:\.{1,2}\/|\/)?[\w.~+-]+)(?:\/[\w.~+-]+)*\/?(?:#[\w.~:-]+)?)/g;
+const PATH_TOKEN_RE = /(?<![\w@])((?:(?:\.{1,2}\/|\/)?(?:[\w.~+-]+\/)*[\w.~+-]+\.(?:md|mdx|markdown|rst|adoc|asciidoc)(?:#[\w.~:-]+)?|docs\/[\w.~+/-]*))(?![\w./-])/gi;
+const AGENT_DIRECTORY_PREFIX = "docs/agents/";
+
+function activeDocuments(manifest) {
+  return (manifest.documents || []).filter((doc) => !INACTIVE_STATUSES.has(doc.status));
+}
+
+/** Return [active agent output paths, selected agent-directory prefixes]. */
+function agentContextTargets(manifest) {
+  const paths = new Set(
+    activeDocuments(manifest)
+      .filter((doc) => doc.group === AGENT_CONTEXT_GROUP && typeof doc.path === "string")
+      .map((doc) => doc.path),
+  );
+  const prefixes = new Set(
+    [...paths].some((item) => item.startsWith(AGENT_DIRECTORY_PREFIX))
+      ? [AGENT_DIRECTORY_PREFIX]
+      : [],
+  );
+  return [paths, prefixes];
+}
+
+function managedDocumentPaths(manifest) {
+  return new Set(
+    activeDocuments(manifest)
+      .filter((doc) => doc.type !== "machine-config" && typeof doc.path === "string")
+      .map((doc) => doc.path),
+  );
+}
+
+function matches(target, paths, prefixes) {
+  if (paths.has(target)) return true;
+  return [...prefixes].some(
+    (prefix) => target === prefix.replace(/\/$/, "") || target.startsWith(prefix),
+  );
+}
+
+/** Resolve `..` segments without touching the filesystem. */
+function collapse(value) {
+  const parts = [];
+  for (const part of value.split("/")) {
+    if (part === "" || part === ".") continue;
+    if (part === "..") {
+      if (parts.length) parts.pop();
+      continue;
+    }
+    parts.push(part);
+  }
+  return parts.join("/");
+}
+
+function cleanReference(raw) {
+  return raw.trim().replace(/^[`"'<>]+|[`"'<>]+$/g, "").replace(/[.,;:!?]+$/g, "");
+}
+
+function referenceCandidates(raw, base) {
+  let value = cleanReference(raw);
+  if (!value || /^(?:https?:\/\/|mailto:)/.test(value)) return [];
+  value = value.split("#", 1)[0].split("?", 1)[0];
+  if (!value) return [];
+
+  const direct = collapse(value.replace(/^\/+/, ""));
+  const relative = collapse(`${base}/${value}`);
+  let candidates;
+  if (value.startsWith("/")) candidates = [direct];
+  else if (value.startsWith("./") || value.startsWith("../")) candidates = [relative, direct];
+  else if (value.startsWith("docs/") || value.startsWith(".claude/")) candidates = [direct, relative];
+  else candidates = [relative, direct];
+  return [...new Set(candidates.filter(Boolean))];
+}
+
+function matchedReference(raw, base, paths, prefixes) {
+  return referenceCandidates(raw, base).find((candidate) => matches(candidate, paths, prefixes)) || null;
+}
+
+function linkTarget(raw) {
+  const value = raw.trim();
+  if (value.startsWith("<") && value.includes(">")) return value.slice(1, value.indexOf(">"));
+  return value ? value.split(/\s+/, 1)[0] : "";
+}
+
+function looksLikePathImport(raw) {
+  const value = cleanReference(raw).split("#", 1)[0].split("?", 1)[0].replace(/\/$/, "");
+  return /^(?:docs\/|\.claude\/|\.\.?\/|\/)/.test(value) || Boolean(path.posix.extname(value));
+}
+
+function maskSpans(line, spans) {
+  if (!spans.length) return line;
+  const chars = line.split("");
+  for (const [start, end] of spans) {
+    for (let index = start; index < end; index += 1) chars[index] = " ";
+  }
+  return chars.join("");
+}
+
+function overlaps(start, end, spans) {
+  return spans.some(([claimedStart, claimedEnd]) => start < claimedEnd && claimedStart < end);
+}
+
+function isPathChar(value) {
+  return Boolean(value && /[\w./-]/.test(value));
+}
+
+/** Return managed paths mentioned outside links, URLs, and imports. */
+function bareReferences(line, base, paths, prefixes) {
+  const found = [];
+  const claimed = [];
+  PATH_TOKEN_RE.lastIndex = 0;
+  let match;
+  while ((match = PATH_TOKEN_RE.exec(line)) !== null) {
+    const target = matchedReference(match[1], base, paths, prefixes);
+    if (target) {
+      found.push(target);
+      claimed.push([match.index, match.index + match[1].length]);
+    }
+  }
+
+  const literals = [
+    ...[...paths].sort((a, b) => b.length - a.length || a.localeCompare(b)).map((item) => [item, false]),
+    ...[...prefixes].sort((a, b) => b.length - a.length || a.localeCompare(b)).map((item) => [item, true]),
+  ];
+  for (const [literal, isPrefix] of literals) {
+    let cursor = 0;
+    while (cursor <= line.length) {
+      const start = line.indexOf(literal, cursor);
+      if (start === -1) break;
+      const end = start + literal.length;
+      cursor = end;
+      if (start && isPathChar(line[start - 1])) continue;
+      if (!isPrefix && end < line.length && isPathChar(line[end])) continue;
+      let referenceEnd = end;
+      if (isPrefix) {
+        while (referenceEnd < line.length && isPathChar(line[referenceEnd])) referenceEnd += 1;
+      }
+      if (overlaps(start, referenceEnd, claimed)) continue;
+      const target = matchedReference(line.slice(start, referenceEnd), base, paths, prefixes);
+      if (target) {
+        found.push(target);
+        claimed.push([start, referenceEnd]);
+      }
+    }
+  }
+  return found;
+}
+
+function record(findings, seen, line, target, kind) {
+  const key = `${line}\u0000${kind}\u0000${target}`;
+  if (!seen.has(key)) {
+    seen.add(key);
+    findings.push({ line, target, kind });
+  }
+}
+
+/** Return non-agent references to active agent outputs.
+ *
+ * Records remain compatible with the former `{line, target}` API and add
+ * `kind` so audit output can distinguish links, imports, and bare paths. */
+function agentContextLeaks(doc, manifest, text) {
+  if (doc.group === AGENT_CONTEXT_GROUP) return [];
+  const [paths, prefixes] = agentContextTargets(manifest);
+  if (!paths.size) return [];
+
+  const base = path.posix.dirname(doc.path);
+  const findings = [];
+  const seen = new Set();
+  for (const [index, line] of text.split(/\r?\n/).entries()) {
+    const number = index + 1;
+    const destinationSpans = [];
+    MARKDOWN_LINK_RE.lastIndex = 0;
+    let match;
+    while ((match = MARKDOWN_LINK_RE.exec(line)) !== null) {
+      const target = linkTarget(match[2]);
+      const matched = matchedReference(target, base, paths, prefixes);
+      if (matched) record(findings, seen, number, matched, "markdown-link");
+      const offset = match[0].lastIndexOf(match[2]);
+      destinationSpans.push([match.index + offset, match.index + offset + match[2].length]);
+    }
+
+    let working = maskSpans(line, destinationSpans);
+    RAW_URL_RE.lastIndex = 0;
+    const urlSpans = [...working.matchAll(RAW_URL_RE)].map((item) => [item.index, item.index + item[0].length]);
+    working = maskSpans(working, urlSpans);
+
+    const importSpans = [];
+    AT_IMPORT_RE.lastIndex = 0;
+    while ((match = AT_IMPORT_RE.exec(working)) !== null) {
+      const matched = matchedReference(match[1], base, paths, prefixes);
+      if (matched) record(findings, seen, number, matched, "at-import");
+      importSpans.push([match.index, match.index + match[0].length]);
+    }
+    working = maskSpans(working, importSpans);
+
+    for (const target of bareReferences(working, base, paths, prefixes)) {
+      record(findings, seen, number, target, "agent-output-path");
+    }
+  }
+  return findings;
+}
+
+/** Return forbidden references emitted by an agent-context output. */
+function agentContextOutboundFindings(doc, manifest, text) {
+  if (doc.group !== AGENT_CONTEXT_GROUP) return [];
+
+  const [agentPaths, prefixes] = agentContextTargets(manifest);
+  const managedPaths = managedDocumentPaths(manifest);
+  const referencePaths = new Set([...agentPaths, ...managedPaths]);
+  const base = path.posix.dirname(doc.path);
+  const findings = [];
+  const seen = new Set();
+
+  for (const [index, line] of text.split(/\r?\n/).entries()) {
+    const number = index + 1;
+    const linkSpans = [];
+    MARKDOWN_LINK_RE.lastIndex = 0;
+    let match;
+    while ((match = MARKDOWN_LINK_RE.exec(line)) !== null) {
+      record(findings, seen, number, linkTarget(match[2]) || "<empty>", "markdown-link");
+      linkSpans.push([match.index, match.index + match[0].length]);
+    }
+    let working = maskSpans(line, linkSpans);
+
+    const urlSpans = [];
+    RAW_URL_RE.lastIndex = 0;
+    while ((match = RAW_URL_RE.exec(working)) !== null) {
+      record(findings, seen, number, match[0], "raw-url");
+      urlSpans.push([match.index, match.index + match[0].length]);
+    }
+    working = maskSpans(working, urlSpans);
+
+    const importSpans = [];
+    AT_IMPORT_RE.lastIndex = 0;
+    while ((match = AT_IMPORT_RE.exec(working)) !== null) {
+      const raw = match[1];
+      const matched = matchedReference(raw, base, referencePaths, prefixes);
+      if (matched || looksLikePathImport(raw)) {
+        record(findings, seen, number, matched || cleanReference(raw), "at-import");
+        importSpans.push([match.index, match.index + match[0].length]);
+      }
+    }
+    working = maskSpans(working, importSpans);
+
+    for (const target of bareReferences(working, base, referencePaths, prefixes)) {
+      const kind = matches(target, agentPaths, prefixes)
+        ? "agent-output-path"
+        : "managed-document-path";
+      record(findings, seen, number, target, kind);
+    }
+  }
+  return findings;
+}
+
+module.exports = {
+  AGENT_CONTEXT_GROUP,
+  agentContextTargets,
+  agentContextLeaks,
+  agentContextOutboundFindings,
+};

@@ -1,0 +1,54 @@
+<!-- Slide 5 — Closing archetype: recap + thank-you, bookending the title slide. -->
+<style>
+  :root {
+    --bg: #0b0c1a; --surface: #181a2d; --fg: #f5f5f7; --muted: #a8acb8;
+    --accent: #7c5cff; --accent-2: #ffd166;
+    --font-body: 'Inter', system-ui, sans-serif;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { width: 720px; height: 405px; overflow: hidden;
+    background: radial-gradient(circle at 30% 70%, rgba(124,92,255,0.16), transparent 60%), var(--bg);
+    color: var(--fg); font-family: var(--font-body); }
+  .slide { width: 720px; height: 405px; padding: 44px 60px 48px;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 16px; text-align: center; position: relative; }
+  .mark { position: relative; width: 108px; height: 108px; display: flex; align-items: center; justify-content: center; }
+  .mark img { width: 78px; height: 78px; position: relative; z-index: 2; }
+  .mark svg { position: absolute; inset: 0; width: 108px; height: 108px; z-index: 1; }
+  .ring { transform-origin: center; transform-box: fill-box; }
+  h1 { font-size: 46px; font-weight: 800; }
+  h1 span { color: var(--accent); }
+  .recap { font-size: 18px; color: var(--muted); max-width: 540px; }
+  .slide-footer { position: absolute; bottom: 0; left: 0; right: 0; height: 26px;
+    display: flex; align-items: center; justify-content: space-between; padding: 0 18px;
+    z-index: 100; border-top: 1px solid rgba(255,255,255,0.08); background: rgba(11,12,26,0.7); }
+  .brand, .slide-num { font-size: 10px; color: var(--muted); font-weight: 600; letter-spacing: 0.06em; }
+</style>
+<div class="slide">
+  <div class="mark">
+    <svg viewBox="0 0 108 108" aria-hidden="true">
+      <circle class="ring" cx="54" cy="54" r="48" fill="none" stroke="var(--accent)" stroke-width="2" opacity="0.5"/>
+    </svg>
+    <img src="./assets/visuals/spark.svg" alt="" data-anim data-anim-from="scale"/>
+  </div>
+  <h1 data-anim data-anim-from="up">That's the <span>pattern set</span></h1>
+  <p class="recap" data-anim data-anim-from="up">Entrance · signature idle · layout · step protocol · overlay — copy any slide as a starting point.</p>
+</div>
+<div class="slide-footer">
+  <span class="brand">slides-animejs</span>
+  <span class="slide-num">5 / 5</span>
+</div>
+<script type="module">
+  import { animate } from "/assets/anime.esm.min.js";
+  // Reuse the title's breathing-ring idle for bookend symmetry (slide 5 → index 4).
+  window.__slideTL = window.__slideTL || {};
+  window.__slideTL[4] = (root) => {
+    const ring = root.querySelector('.ring');
+    const a = animate(ring, {
+      scale: [{ to: 1.06 }, { to: 1 }],
+      opacity: [{ to: 0.8 }, { to: 0.4 }],
+      duration: 2600, loop: true, alternate: true, ease: 'inOutSine',
+    });
+    return { cancel: () => { try { a.cancel?.(); } catch (e) {} } };
+  };
+</script>

@@ -1,0 +1,46 @@
+<!-- Slide 2 — Section divider archetype: big number + label on an accent field. -->
+<style>
+  :root {
+    --bg: #0b0c1a; --surface: #181a2d; --fg: #f5f5f7; --muted: #a8acb8;
+    --accent: #7c5cff; --accent-2: #ffd166;
+    --font-body: 'Inter', system-ui, sans-serif;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { width: 720px; height: 405px; overflow: hidden;
+    background: var(--accent); color: #fff; font-family: var(--font-body); }
+  .slide { width: 720px; height: 405px; padding: 56px 64px 48px;
+    display: flex; flex-direction: column; justify-content: center; gap: 8px; position: relative; }
+  .num { font-size: 120px; font-weight: 800; line-height: 1; letter-spacing: -0.02em;
+    will-change: transform; }
+  .rule { width: 80px; height: 4px; background: var(--accent-2); border-radius: 2px; margin: 14px 0; }
+  h1 { font-size: 40px; font-weight: 700; }
+  .sub { font-size: 18px; opacity: 0.85; max-width: 480px; margin-top: 6px; }
+  .slide-footer { position: absolute; bottom: 0; left: 0; right: 0; height: 26px;
+    display: flex; align-items: center; justify-content: space-between; padding: 0 18px;
+    z-index: 100; border-top: 1px solid rgba(255,255,255,0.18); }
+  .brand, .slide-num { font-size: 10px; color: rgba(255,255,255,0.8); font-weight: 600; letter-spacing: 0.06em; }
+</style>
+<div class="slide">
+  <div class="num" data-anim data-anim-from="left">01</div>
+  <div class="rule" data-anim data-anim-from="left"></div>
+  <h1 data-anim data-anim-from="up">Layout &amp; structure</h1>
+  <p class="sub" data-anim data-anim-from="up">Dividers orient the audience as they cross from one section into the next.</p>
+</div>
+<div class="slide-footer">
+  <span class="brand">slides-animejs</span>
+  <span class="slide-num">2 / 5</span>
+</div>
+<script type="module">
+  import { animate } from "/assets/anime.esm.min.js";
+  // Baseline idle: the big number drifts a few pixels. translateY is safe on a
+  // plain element (no SVG <g> involved).
+  window.__slideTL = window.__slideTL || {};
+  window.__slideTL[1] = (root) => {
+    const num = root.querySelector('.num');
+    const a = animate(num, {
+      translateY: [{ to: -4 }, { to: 4 }],
+      duration: 3200, loop: true, alternate: true, ease: 'inOutSine',
+    });
+    return { cancel: () => { try { a.cancel?.(); } catch (e) {} } };
+  };
+</script>

@@ -1,0 +1,33 @@
+{
+  "id": "decisions_index",
+  "type": "decision-index",
+  "summary": "What decision records are, the status lifecycle, and the reader question each record answers",
+  "contract_file": "content/records/decision-index.contract.md",
+  "path": "docs/architecture/decisions/README.md",
+  "group": "records",
+  "selection": {
+    "mode": "static",
+    "min_tier": "diligence",
+    "selectors": {},
+    "condition": null,
+    "requires_children": [
+      "adr"
+    ]
+  },
+  "instruction_file": "content/shared/decision-records.instruction.md",
+  "requires": [
+    "git_history"
+  ],
+  "target_depth": "router",
+  "answer_shape": "router",
+  "write_order": 80,
+  "nav_order": 90,
+  "provenance_mode": "sections",
+  "audit_profile": "router",
+  "dominant_form": null,
+  "template_file": "content/records/decision-index.template.md",
+  "contract_revision": "3.0.0",
+  "title": "Decision log",
+  "compact_group": "decisions_compact",
+  "compact_order": 51
+}

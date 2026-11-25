@@ -1,0 +1,118 @@
+"""Small CommonMark-compatible fence scanner shared by Docforge tools."""
+
+from __future__ import annotations
+
+import re
+
+OPEN_RE = re.compile(r"^\s{0,3}(?P<marker>`{3,}|~{3,})(?P<info>[^`]*)$")
+SOURCE_LINK_RE = re.compile(r"\[[^\]]+\]\((?P<target>[^)]+\.(?:c|cc|cpp|cs|go|java|js|jsx|json|mjs|properties|py|rb|rs|swift|toml|ts|tsx|xml|ya?ml)(?:#[^)]+)?)\)")
+SOURCE_LINE_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_./-]*\.(?:c|cc|cpp|cs|go|java|js|jsx|json|mjs|properties|py|rb|rs|swift|toml|ts|tsx|xml|ya?ml)(?:#L\d+(?:-L\d+)?|:\d+(?:-\d+)?)(?!\s*@\s*[0-9a-f]{40})\b")
+LOCATOR_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_./-]*#L\d+(?:-L\d+)?\s*@\s*[0-9a-f]{40}")
+# A full markdown link wrapped in a single backtick on each side. Markdown
+# renders that as a literal code span, not a link -- the citation is dead.
+BACKTICK_WRAPPED_LINK_RE = re.compile(r"`\[[^\]]+\]\([^)]+\)`")
+SHELL_LANGUAGES = {"bash", "sh", "shell", "zsh", "fish", "powershell", "pwsh"}
+
+
+def scan_fences(text: str) -> list[dict]:
+    """Return closed and unclosed fences with zero ambiguity about protected lines."""
+    fences: list[dict] = []
+    current: dict | None = None
+    for number, line in enumerate(text.splitlines(), 1):
+        match = OPEN_RE.match(line)
+        if current is None:
+            if not match:
+                continue
+            info = match.group("info").strip().split()
+            language = info[0] if info else ""
+            role = next((part.split("=", 1)[1] for part in info[1:] if part.startswith("docforge-role=")), None)
+            current = {
+                "start": number,
+                "marker": match.group("marker"),
+                "language": language,
+                "role": role or inferred_role(language),
+                "explicit_role": role,
+                "lines": [],
+            }
+            continue
+        if match and match.group("marker")[0] == current["marker"][0] and len(match.group("marker")) >= len(current["marker"]):
+            current["end"] = number
+            fences.append(current)
+            current = None
+        else:
+            current["lines"].append((number, line))
+    if current is not None:
+        current["end"] = None
+        fences.append(current)
+    return fences
+
+
+def inferred_role(language: str) -> str:
+    if language == "mermaid":
+        return "diagram"
+    if language in SHELL_LANGUAGES:
+        return "command"
+    if language in {"markdown", "mdx"}:
+        return "markup"
+    if language in {"text", "ascii", "console", ""}:
+        return "ambiguous"
+    return "code"
+
+
+def visible_presentation_defects(text: str, web_base: str | None = None) -> list[dict]:
+    """Presentation defects outside fences.
+
+    `web_base` is the repository's declared permalink base. A link built from it
+    is the sanctioned way to send a reader into source, so it is exempt from the
+    source-link and source-line rules -- both of which are otherwise
+    scheme-blind and would fire on the very form the expander produces. An
+    unexpanded authoring-form link stays a defect: it means `link_sources` never
+    ran, and it would 404 in the rendered site."""
+    defects: list[dict] = []
+    fences = scan_fences(text)
+    fenced_lines = {number for fence in fences for number, _ in fence["lines"]}
+    base = (web_base or "").rstrip("/")
+    for number, line in enumerate(text.splitlines(), 1):
+        if number in fenced_lines:
+            continue
+        if LOCATOR_RE.search(line):
+            defects.append({"kind": "visible-source-locator", "line": number, "detail": "use provenance, not a path/range/blob citation"})
+        wrapped_match = BACKTICK_WRAPPED_LINK_RE.search(line)
+        if wrapped_match:
+            defects.append({"kind": "backtick-wrapped-link", "line": number, "detail": wrapped_match.group(0)})
+        pinned: list[tuple[int, int]] = []
+        for match in SOURCE_LINK_RE.finditer(line):
+            target = match.group("target")
+            if base and target.startswith(base):
+                pinned.append(match.span())
+                continue
+            defects.append({
+                "kind": "unpinned-source-link" if base else "source-code-link",
+                "line": number,
+                "detail": target,
+            })
+        for match in SOURCE_LINE_RE.finditer(line):
+            # The `#L97-104` inside a pinned permalink is part of the URL, not a
+            # citation a reader has to decode.
+            if any(start <= match.start() and match.end() <= end for start, end in pinned):
+                continue
+            defects.append({"kind": "visible-source-line", "line": number, "detail": match.group(0)})
+    for fence in fences:
+        if fence["role"] not in {"command", "code", "diagram", "structure", "ambiguous"}:
+            continue
+        content = [line.strip() for _, line in fence["lines"] if line.strip()]
+        words = sum(len(re.findall(r"[A-Za-z]{2,}", line)) for line in content)
+        sentence_lines = [line for line in content if re.search(r"[.!?][\"')\]]?$", line)]
+        syntax_lines = [line for line in content if re.search(r"[{};]|=>|\$ |^[-+]?\w+[=:]|\|", line)]
+        if (
+            len(content) >= 2
+            and words >= 20
+            and len(sentence_lines) / len(content) >= 0.7
+            and len(syntax_lines) / len(content) < 0.3
+        ):
+            defects.append({
+                "kind": "prose-in-code-fence",
+                "line": fence["start"],
+                "detail": f"{fence['role']} fence contains explanatory prose",
+            })
+    return defects

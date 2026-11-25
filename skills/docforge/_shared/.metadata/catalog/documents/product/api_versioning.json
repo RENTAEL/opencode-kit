@@ -1,0 +1,33 @@
+{
+  "id": "api_versioning",
+  "type": "versioning",
+  "summary": "Version scheme, compatibility policy, deprecation window, migration path for public surface changes",
+  "contract_file": "content/product/contracts/versioning.md",
+  "path": "docs/product/versioning.md",
+  "group": "product",
+  "selection": {
+    "mode": "static",
+    "min_tier": "spine",
+    "selectors": {
+      "shapes": [
+        "api-service"
+      ]
+    },
+    "condition": null
+  },
+  "instruction_file": "content/product/instructions.md",
+  "requires": [
+    "code_graph",
+    "git_history"
+  ],
+  "target_depth": "reference",
+  "answer_shape": "answer-first",
+  "write_order": 42,
+  "provenance_mode": "sections",
+  "audit_profile": "standard",
+  "dominant_form": "table",
+  "contract_revision": "3.0.0",
+  "template_file": "content/product/templates/api-versioning.md",
+  "compact_group": "product_compact",
+  "compact_order": 12
+}

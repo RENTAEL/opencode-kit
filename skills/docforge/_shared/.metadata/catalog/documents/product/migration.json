@@ -1,0 +1,33 @@
+{
+  "id": "migration",
+  "type": "migration",
+  "summary": "Source/target versions, breaking changes, ordered changes, verification, rollback",
+  "contract_file": "content/product/contracts/migration.md",
+  "path": "docs/product/migrations/{slug}.md",
+  "group": "product",
+  "selection": {
+    "mode": "dynamic",
+    "min_tier": "spine",
+    "selectors": {
+      "shapes": [
+        "library-sdk"
+      ]
+    },
+    "condition": "discovered_migration"
+  },
+  "instruction_file": "content/product/instructions.md",
+  "requires": [
+    "code_graph",
+    "git_history"
+  ],
+  "target_depth": "deep-dive",
+  "answer_shape": "executable-procedure",
+  "write_order": 43,
+  "provenance_mode": "sections",
+  "audit_profile": "procedure",
+  "dominant_form": null,
+  "contract_revision": "3.0.0",
+  "template_file": "content/product/templates/migration.md",
+  "compact_group": "product_compact",
+  "compact_order": 52
+}

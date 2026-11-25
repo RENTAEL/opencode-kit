@@ -1,0 +1,702 @@
+#!/usr/bin/env python3
+"""
+Transcribe audio to SRT using Whisper with optional VAD pre-splitting and
+MMS_FA forced alignment post-processing.
+
+Pipeline:
+    VAD pre-split (Silero VAD for mlx, vad_filter for faster-whisper)
+    → Whisper transcription per chunk
+    → Optional MMS_FA CTC forced alignment (corrects segment boundaries)
+    → refine_segments (semantic refinement)
+
+Usage:
+    python3 scripts/transcribe.py <audio.wav> [options]
+"""
+
+import argparse
+import json
+import os
+import platform
+import sys
+import time
+from pathlib import Path
+
+
+# ── Constants ──────────────────────────────────────────────────────
+
+INITIAL_PROMPT_ZH = "以下是普通话的句子，使用简体中文书写。"
+
+
+# ── Helpers ────────────────────────────────────────────────────────
+
+def format_timestamp(seconds: float) -> str:
+    total_ms = max(0, int(round(seconds * 1000)))
+    h, remainder = divmod(total_ms, 3_600_000)
+    m, remainder = divmod(remainder, 60_000)
+    s, ms = divmod(remainder, 1000)
+    return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
+
+
+def _load_groq_api_key(env_file: Path | None = None) -> str | None:
+    if os.environ.get("GROQ_API_KEY"):
+        return os.environ["GROQ_API_KEY"]
+
+    path = env_file or Path(__file__).resolve().parent.parent / ".env"
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return None
+
+    for line in lines:
+        name, separator, value = line.partition("=")
+        if separator and name.strip() == "GROQ_API_KEY":
+            value = value.strip()
+            if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+                value = value[1:-1]
+            if value:
+                os.environ["GROQ_API_KEY"] = value
+                return value
+            return None
+    return None
+
+
+def get_pause_threshold(language: str | None) -> float:
+    if language and language.startswith(("zh", "ja", "ko")):
+        return 0.3
+    return 0.5
+
+
+def get_model_path() -> str:
+    skill_dir = Path(__file__).resolve().parent.parent
+    models_dir = skill_dir / "models"
+    models_dir.mkdir(parents=True, exist_ok=True)
+    return str(models_dir)
+
+
+def get_audio_duration(path: str) -> float:
+    """Quickly estimate audio duration via ffprobe (no torch dependency)."""
+    import subprocess, json
+    cmd = [
+        "ffprobe", "-v", "quiet", "-print_format", "json",
+        "-show_streams", path,
+    ]
+    try:
+        data = json.loads(subprocess.check_output(cmd))
+        for stream in data.get("streams", []):
+            dur = stream.get("duration")
+            if dur:
+                return float(dur)
+    except Exception:
+        pass
+    return 0.0
+
+
+# ── Raw segment processing ─────────────────────────────────────────
+
+def _normalize_segments(segments: list) -> list[dict]:
+    quality_keys = ("no_speech_prob", "avg_logprob", "compression_ratio",
+                    "temperature", "tokens")
+    out = []
+    for seg in segments:
+        if isinstance(seg, dict):
+            normalized = {
+                "start": seg.get("start", 0.0),
+                "end": seg.get("end", 0.0),
+                "text": seg.get("text", "").strip(),
+                "words": list(seg.get("words", [])),
+            }
+            normalized.update({k: seg[k] for k in quality_keys if k in seg})
+            out.append(normalized)
+        else:
+            words = getattr(seg, "words", None) or []
+            normalized = {
+                "start": getattr(seg, "start", 0.0),
+                "end": getattr(seg, "end", 0.0),
+                "text": getattr(seg, "text", "").strip(),
+                "words": list(words),
+            }
+            for key in quality_keys:
+                value = getattr(seg, key, None)
+                if isinstance(value, (int, float, list, tuple)):
+                    normalized[key] = value
+            out.append(normalized)
+    return out
+
+
+# ── VAD (Silero VAD for mlx) ───────────────────────────────────────
+
+def _vad_split_mlx(audio_path: str, min_segment_s: float = 1.0,
+                   merge_gap_s: float = 1.0) -> list[dict]:
+    """Split audio into VAD-based speech segments. Returns list of (start, end) in seconds."""
+    import soundfile as sf
+    import numpy as np
+
+    audio_np, sr = sf.read(audio_path, dtype='float32')
+    if audio_np.ndim > 1:
+        audio_np = audio_np.mean(axis=1)
+    audio_len = len(audio_np)
+
+    try:
+        from silero_vad_notorch import load_silero_vad, get_speech_timestamps
+        vad_model = load_silero_vad(onnx=True)
+        speech_segs = get_speech_timestamps(
+            audio_np, vad_model,
+            sampling_rate=sr,
+            threshold=0.5,
+            min_speech_duration_ms=int(min_segment_s * 1000),
+            min_silence_duration_ms=500,
+            return_seconds=True,
+        )
+    except Exception as e:
+        print(f"warning: Silero VAD failed ({e}), falling back to full audio", file=sys.stderr)
+        return [{"start": 0.0, "end": audio_len / sr}]
+
+    if not speech_segs:
+        return [{"start": 0.0, "end": audio_len / sr}]
+
+    merged = [speech_segs[0]]
+    for seg in speech_segs[1:]:
+        if seg['start'] - merged[-1]['end'] < merge_gap_s:
+            merged[-1]['end'] = seg['end']
+        else:
+            merged.append(seg)
+
+    filtered = [s for s in merged if s['end'] - s['start'] >= min_segment_s]
+    return filtered if filtered else [{"start": 0.0, "end": audio_len / sr}]
+
+
+def _transcribe_vad_chunks(audio_path: str, model_name: str, language: str | None,
+                            merge_gap_s: float = 1.0) -> list[dict]:
+    """Transcribe audio by splitting into VAD chunks and transcribing each independently."""
+    import mlx_whisper
+    import numpy as np
+    import soundfile as sf
+
+    audio_np, sr = sf.read(audio_path, dtype='float32')
+
+    speech_segs = _vad_split_mlx(audio_path, merge_gap_s=merge_gap_s)
+    print(f"vad: {len(speech_segs)} speech segments", file=sys.stderr)
+
+    all_segments = []
+    for i, vs in enumerate(speech_segs):
+        chunk_start = int(vs['start'] * 16000)
+        chunk_end = int(vs['end'] * 16000)
+        chunk = audio_np[chunk_start:chunk_end]
+
+        if len(chunk) < 16000 * 0.3:
+            continue
+
+        try:
+            result = mlx_whisper.transcribe(
+                chunk,
+                path_or_hf_repo=model_name,
+                language=language,
+                word_timestamps=True,
+                initial_prompt=INITIAL_PROMPT_ZH if language and language.startswith("zh") else None,
+                logprob_threshold=-1.0,
+                no_speech_threshold=0.6,
+            )
+            for seg in result.get("segments", []):
+                seg["start"] += vs['start']
+                seg["end"] += vs['start']
+                all_segments.append(seg)
+            print(f"  chunk {i+1}/{len(speech_segs)} [{vs['start']:.1f}-{vs['end']:.1f}s] "
+                  f"→ {len(result.get('segments', []))} segs", file=sys.stderr)
+        except Exception as e:
+            print(f"  chunk {i+1} [{vs['start']:.1f}-{vs['end']:.1f}s] failed: {e}",
+                  file=sys.stderr)
+
+    if not all_segments:
+        print("vad: no segments produced, falling back to full audio", file=sys.stderr)
+        result = mlx_whisper.transcribe(
+            audio_np, path_or_hf_repo=model_name,
+            language=language, word_timestamps=True,
+            initial_prompt=INITIAL_PROMPT_ZH if language and language.startswith("zh") else None,
+            logprob_threshold=-1.0,
+            no_speech_threshold=0.6,
+        )
+        all_segments = result.get("segments", [])
+
+    all_segments.sort(key=lambda s: s.get("start", 0))
+    return all_segments
+
+
+# ── Shared post-processing ─────────────────────────────────────────
+
+def _postprocess(segments: list[dict], max_line_length: int, max_line_ms: int,
+                 cleanup_audit: list[dict] | None = None) -> list[dict]:
+    """Shared refine + cleanup pipeline for both mlx and faster-whisper."""
+    if not segments:
+        return segments
+    raw_count = len(segments)
+    source_segments = segments
+    out = segments
+    try:
+        from refine_segments import refine as refine_segs
+        before = len(out)
+        out = refine_segs(out, max_chars=max_line_length, max_line_ms=max_line_ms)
+        if len(out) != before:
+            print(f"refine_segments: {before} → {len(out)} segments (semantic + length split)",
+                  file=sys.stderr)
+    except ImportError:
+        print("refine_segments not available, skipping", file=sys.stderr)
+    except Exception as e:
+        print(f"refine_segments error ({e}), skipping", file=sys.stderr)
+
+    quality_keys = ("no_speech_prob", "avg_logprob", "compression_ratio",
+                    "temperature", "tokens")
+    for refined in out:
+        sources = [
+            {"start": source.get("start"), "end": source.get("end"),
+             **{k: source[k] for k in quality_keys if k in source}}
+            for source in source_segments
+            if source.get("start", 0) < refined.get("end", 0)
+            and source.get("end", 0) > refined.get("start", 0)
+            and any(k in source for k in quality_keys)
+        ]
+        if sources:
+            refined["source_quality"] = sources[0] if len(sources) == 1 else sources
+
+    try:
+        from cleanup_segments import cleanup as cleanup_segs
+        before_c = len(out)
+        out = cleanup_segs(out, audit=cleanup_audit)
+        if len(out) != before_c:
+            print(f"cleanup_segments: {before_c} → {len(out)} segments (removed empty/duplicate)",
+                  file=sys.stderr)
+    except ImportError:
+        print("cleanup_segments not available, skipping", file=sys.stderr)
+    except Exception as e:
+        print(f"cleanup_segments error ({e}), skipping", file=sys.stderr)
+
+    print(f"segments: {raw_count} raw segs → {len(out)} segments", file=sys.stderr)
+    return out
+
+
+# ── Transcribe backends ────────────────────────────────────────────
+
+def transcribe_mlx(audio_path: str, model_name: str, language: str | None,
+                   max_line_length: int, pause_threshold: float,
+                   max_line_ms: int, vad: bool = False,
+                   cleanup_audit: list[dict] | None = None) -> list[dict]:
+    models_dir = get_model_path()
+    os.environ["HF_HOME"] = models_dir
+    os.environ["XDG_CACHE_HOME"] = str(Path(models_dir) / "cache")
+
+    import mlx_whisper as _mw
+
+    print(f"engine: mlx-whisper", file=sys.stderr)
+    print(f"model: {model_name}", file=sys.stderr)
+    print(f"device: Apple Silicon (MLX)", file=sys.stderr)
+    print(f"    transcribing: {audio_path}", file=sys.stderr)
+
+    t0 = time.time()
+
+    if vad:
+        raw_segments = _transcribe_vad_chunks(audio_path, model_name, language)
+    else:
+        result = _mw.transcribe(
+            audio_path,
+            path_or_hf_repo=model_name,
+            language=language,
+            word_timestamps=True,
+            initial_prompt=INITIAL_PROMPT_ZH if language and language.startswith("zh") else None,
+            logprob_threshold=-1.0,
+            no_speech_threshold=0.6,
+        )
+        raw_segments = result.get("segments", [])
+
+    elapsed = time.time() - t0
+    print(f"transcription took {elapsed:.1f}s", file=sys.stderr)
+
+    if not raw_segments:
+        print("error: no segments in mlx-whisper output", file=sys.stderr)
+        sys.exit(1)
+
+    return _postprocess(raw_segments, max_line_length, max_line_ms, cleanup_audit)
+
+
+def transcribe_faster(audio_path: str, model_name: str, language: str | None,
+                      max_line_length: int, pause_threshold: float,
+                      max_line_ms: int, vad: bool = False,
+                      cleanup_audit: list[dict] | None = None) -> list[dict]:
+    """Transcribe via faster-whisper (CTranslate2). Mirrors transcribe_mlx interface."""
+    models_dir = get_model_path()
+    os.environ["HF_HOME"] = models_dir
+
+    from faster_whisper import WhisperModel
+
+    print(f"engine: faster-whisper", file=sys.stderr)
+    print(f"model: {model_name}", file=sys.stderr)
+    print(f"device: auto (CTranslate2)", file=sys.stderr)
+    print(f"    transcribing: {audio_path}", file=sys.stderr)
+
+    t0 = time.time()
+
+    model = WhisperModel(model_name, download_root=models_dir, device="auto")
+
+    # faster-whisper API compatibility: initial_prompt may not exist in older versions
+    transcribe_kwargs: dict = dict(
+        language=language,
+        word_timestamps=True,
+        vad_filter=vad,
+        log_prob_threshold=-1.0,
+        no_speech_threshold=0.6,
+    )
+    # Probe for initial_prompt support
+    try:
+        import inspect
+        sig = inspect.signature(model.transcribe)
+        if "initial_prompt" in sig.parameters:
+            transcribe_kwargs["initial_prompt"] = INITIAL_PROMPT_ZH if language and language.startswith("zh") else None
+    except Exception:
+        pass
+
+    segments_iter, info = model.transcribe(audio_path, **transcribe_kwargs)
+    # faster-whisper returns generator of Segment objects
+    raw_list = list(segments_iter)
+    raw_segments = _normalize_segments(raw_list)
+
+    elapsed = time.time() - t0
+    print(f"transcription took {elapsed:.1f}s (language: {info.language} "
+          f"p={info.language_probability:.2f})", file=sys.stderr)
+
+    if not raw_segments:
+        print("error: no segments in faster-whisper output", file=sys.stderr)
+        sys.exit(1)
+
+    return _postprocess(raw_segments, max_line_length, max_line_ms, cleanup_audit)
+
+
+# ── SRT writer ─────────────────────────────────────────────────────
+
+def write_srt(segments: list[dict], output_path: str):
+    with open(output_path, "w", encoding="utf-8") as f:
+        for i, seg in enumerate(segments, 1):
+            f.write(f"{i}\n")
+            f.write(f"{format_timestamp(seg['start'])} --> {format_timestamp(seg['end'])}\n")
+            f.write(f"{seg['text']}\n\n")
+
+
+def export_refined_json(segments: list[dict], output_path: str):
+    """Export refined segments (with word timestamps) for LLM re-segmentation.
+
+    Only segments that carry a non-empty 'words' list are emitted, since
+    word-level timestamps are required for precise re-splitting.
+    """
+    import json
+    payload = [
+        {
+            "start": round(seg["start"], 3),
+            "end": round(seg["end"], 3),
+            "text": seg["text"],
+            "words": [
+                {"word": w.get("word", ""), "start": w.get("start"),
+                 "end": w.get("end")}
+                for w in seg.get("words", [])
+                if w.get("word") and w.get("start") is not None
+                and w.get("end") is not None
+            ],
+            **{k: seg[k] for k in ("no_speech_prob", "avg_logprob",
+                                   "compression_ratio", "temperature", "tokens",
+                                    "source_quality", "cleanup_flags", "timing_review") if k in seg},
+        }
+        for seg in segments
+    ]
+    with open(output_path, "w", encoding="utf-8") as f:
+        json.dump(payload, f, ensure_ascii=False, indent=1)
+    print(f"exported refined segments (with words) -> {output_path}",
+          file=sys.stderr)
+
+
+def export_cleanup_audit(audit: list[dict], output_path: str) -> None:
+    import json
+    audit_path = output_path + ".cleanup.json"
+    with open(audit_path, "w", encoding="utf-8") as f:
+        json.dump(audit, f, ensure_ascii=False, indent=1)
+    print(f"cleanup audit -> {audit_path}", file=sys.stderr)
+
+
+# ── Platform detection ─────────────────────────────────────────────
+
+def detect_platform() -> dict:
+    return {"is_macos": sys.platform == "darwin",
+            "is_arm": platform.machine() == "arm64"}
+
+
+# Groq STT prompt (optional). Guiding spelling can help Whisper transcribe
+# specialised terms, BUT testing showed a Chinese instruction prompt gets
+# re-read aloud as hallucinated speech during silent windows (e.g. "请准确转写
+# 专业术语．保持简体中文。" appearing 23x in one video). Default is NO prompt;
+# pass --prompt only when you've verified it helps for your content.
+DEFAULT_GROQ_PROMPT = None
+
+
+# ── Main ───────────────────────────────────────────────────────────
+
+def main():
+    _load_groq_api_key()
+    parser = argparse.ArgumentParser(
+        description="Transcribe audio to SRT using Whisper"
+    )
+    parser.add_argument("audio", help="audio file path (WAV 16kHz mono)")
+    parser.add_argument("--output", "-o", help="output SRT path")
+    parser.add_argument("--language", "-l", help="language code (e.g. zh, en)")
+    parser.add_argument("--max-line-length", type=int, default=None,
+                        help="characters per subtitle line (default: 60 en / 15 other)")
+    parser.add_argument("--max-line-ms", type=int, default=None,
+                        help="duration per subtitle block in ms (default: 6000 en / 3000 other)")
+    parser.add_argument("--pause-ms", type=int, default=None,
+                        help="pause threshold for sentence split in ms (default: 300 zh / 500 en)")
+    parser.add_argument("--full-segment", action="store_true", default=False,
+                        help="Groq: run the scoring splitter on EVERY segment "
+                             "(not just abnormal ones); default off — verify before enabling")
+    parser.add_argument("--prompt", default=None, metavar="TEXT",
+                        help="Groq STT prompt (<=224 tokens) guiding spelling/context. "
+                             "Default: none — a Chinese instruction prompt is re-read "
+                             "as hallucinated speech in silent windows; only pass one "
+                             "if you've verified it helps your content.")
+    parser.add_argument("--engine", choices=["auto", "mlx", "faster-whisper", "groq"],
+                        default="auto", help="force a specific engine")
+    parser.add_argument("--vad", action="store_true", default=None,
+                        help="enable VAD pre-splitting (Silero VAD for mlx, vad_filter for faster)")
+    parser.add_argument("--no-vad", action="store_true", default=None,
+                        help="disable VAD pre-splitting")
+    parser.add_argument("--export-refined", default=None, metavar="PATH",
+                        help="export refined segments (with word timestamps) as JSON. "
+                             "Default: <output>.words.json is always written, this flag "
+                             "overrides the path.")
+
+    args = parser.parse_args()
+    max_line_length_auto = args.max_line_length is None
+    max_line_ms_auto = args.max_line_ms is None
+    if args.max_line_length is None:
+        args.max_line_length = 60 if args.language == "en" else 15
+    if args.max_line_ms is None:
+        args.max_line_ms = 6000 if args.language == "en" else 3000
+
+    # ── Resolve boolean flags with auto-detection ──────────────
+    audio_path = Path(args.audio)
+    if not audio_path.exists():
+        print(f"error: file not found {audio_path}", file=sys.stderr)
+        sys.exit(1)
+
+    audio_dur = get_audio_duration(str(audio_path))
+    is_long_audio = audio_dur > 600  # > 10 min
+
+    vad_enabled = args.vad if args.vad is not None else (
+        False if args.no_vad else is_long_audio
+    )
+
+    output_path = args.output or str(audio_path.with_suffix(".srt"))
+    cleanup_audit: list[dict] = []
+
+    lang = args.language
+    pause_threshold = (args.pause_ms / 1000.0) if args.pause_ms is not None else get_pause_threshold(lang)
+
+    plat = detect_platform()
+
+    engine = args.engine
+
+    if engine == "groq":
+        api_key = os.environ.get("GROQ_API_KEY")
+        if not api_key:
+            print("error: GROQ_API_KEY is required when --engine groq", file=sys.stderr)
+            sys.exit(1)
+
+        # Local Silero VAD speech map, built BEFORE the API call: long audio
+        # (>30 min) is transcribed in VAD chunks (one call per chunk, cut at
+        # silence gaps) per Groq's long-audio guidance, and the map also feeds
+        # hallucination cleanup and silence-aware splitting afterwards.
+        regions = None
+        vad_map = None
+        try:
+            from vad_map import SpeechRegions, build_vad_map
+            vad_map = build_vad_map(str(audio_path))
+            if vad_map:
+                regions = SpeechRegions.from_map(vad_map)
+                with open(str(output_path) + ".vad.json", "w", encoding="utf-8") as f:
+                    json.dump(vad_map, f, ensure_ascii=False, indent=1)
+                print(f"vad_map: {vad_map['duration']:.0f}s total, "
+                      f"{vad_map['speech_ratio']*100:.1f}% speech, "
+                      f"{vad_map['gap_count']} gaps >= 0.8s -> {output_path}.vad.json",
+                      file=sys.stderr)
+        except Exception as e:
+            print(f"warning: local VAD map unavailable ({e}); "
+                  "single-call upload and word-gap heuristics only", file=sys.stderr)
+
+        from groq_transcribe import transcribe_groq
+        result = transcribe_groq(
+            str(audio_path),
+            api_key=api_key,
+            language=lang,
+            prompt=args.prompt if args.prompt is not None else DEFAULT_GROQ_PROMPT,
+            vad_map=vad_map,
+            duration=audio_dur,
+        )
+        segments = result.get("segments", [])
+        top_words = result.get("words", [])
+        detected_language = result.get("language")
+        # Persist the raw response so post-processing changes can be re-run
+        # (python scripts + this file) without another paid API call.
+        try:
+            with open(str(output_path) + ".raw.json", "w", encoding="utf-8") as f:
+                json.dump(result, f, ensure_ascii=False)
+        except OSError as e:
+            print(f"warning: raw response dump failed ({e})", file=sys.stderr)
+        if not lang and detected_language:
+            lang = detected_language
+            print(f"groq: detected language {lang}", file=sys.stderr)
+            if args.pause_ms is None:
+                pause_threshold = get_pause_threshold(lang)
+            if lang.startswith("en"):
+                if max_line_length_auto:
+                    args.max_line_length = 60
+                if max_line_ms_auto:
+                    args.max_line_ms = 6000
+        print(f"groq: {len(segments)} raw segments, {len(top_words)} word timestamps",
+              file=sys.stderr)
+        if not segments:
+            print("error: no segments in Groq response", file=sys.stderr)
+            sys.exit(1)
+
+        if lang and lang.startswith("en"):
+            from english_segments import merge_english_fragments, refine_english_segments
+            from cleanup_segments import cleanup as cleanup_segs
+            segments = refine_english_segments(
+                segments, top_words, args.max_line_length, args.max_line_ms,
+                pause_threshold=args.pause_ms / 1000 if args.pause_ms is not None else 0.8)
+            segments = merge_english_fragments(segments, args.max_line_length)
+            segments = cleanup_segs(segments, audit=cleanup_audit, english=True,
+                                    regions=regions)
+            # Groq word timestamps swallow the silence around a phrase (a cue
+            # can sit on screen for 20s while nobody talks). Trim every cue
+            # back to the speech the audio actually carries.
+            try:
+                from audio_align import align_segments
+                segments, align_report = align_segments(segments, str(audio_path))
+                if align_report:
+                    print(f"audio_align: trimmed {len(align_report)} cues to speech",
+                          file=sys.stderr)
+                    with open(str(output_path) + ".align.json", "w", encoding="utf-8") as f:
+                        json.dump(align_report, f, ensure_ascii=False, indent=2)
+            except Exception as e:
+                print(f"warning: audio_align failed ({e}); keeping raw timestamps",
+                      file=sys.stderr)
+            export_refined_json(segments, args.export_refined or (str(output_path) + ".words.json"))
+            export_cleanup_audit(cleanup_audit, output_path)
+            write_srt(segments, output_path)
+            print(f"done! {len(segments)} English captions -> {output_path}", file=sys.stderr)
+            return output_path
+
+        from refine_segments import _clean_segments, _merge_fragments
+        segments = _clean_segments(segments)
+        if len(segments) > 1:
+            segments = _merge_fragments(segments, args.max_line_length * 2)
+
+        try:
+            from groq_word_adapter import refine_groq_segments
+            before = len(segments)
+            # Groq default 150ms; user --pause-ms takes precedence
+            groq_pause = (args.pause_ms / 1000.0) if args.pause_ms is not None else 0.15
+            segments = refine_groq_segments(
+                segments, top_words,
+                max_chars=args.max_line_length,
+                max_line_ms=args.max_line_ms,
+                pause_threshold=groq_pause,
+                full_segment=args.full_segment,
+                audio_path=str(audio_path),
+                regions=regions,
+            )
+            if len(segments) != before:
+                print(f"groq_word_adapter: {before} → {len(segments)} segments "
+                      f"(jieba+scoring split for abnormal segments)",
+                      file=sys.stderr)
+        except ImportError as e:
+            print(f"warning: groq_word_adapter unavailable ({e}); "
+                  "retaining Groq segment boundaries", file=sys.stderr)
+        except Exception:
+            print("groq_word_adapter error, skipping", file=sys.stderr)
+
+        # Scoring splits inside refine can break English words across segments
+        # (e.g. "de|saturation"); fragments are contiguous (gap~0) so re-run merge.
+        if len(segments) > 1:
+            try:
+                segments = _merge_fragments(segments, args.max_line_length * 2)
+            except Exception:
+                print("post-refine _merge_fragments error, skipping", file=sys.stderr)
+        try:
+            from cleanup_segments import cleanup as cleanup_segs
+            before_c = len(segments)
+            segments = cleanup_segs(segments, audit=cleanup_audit, regions=regions)
+            if len(segments) != before_c:
+                print(f"cleanup_segments: {before_c} → {len(segments)} segments (removed empty/duplicate)",
+                      file=sys.stderr)
+        except ImportError:
+            pass
+        except Exception:
+            print("cleanup_segments error, skipping", file=sys.stderr)
+        # Re-attach Groq word timestamps to the final segments: split pieces
+        # drop their "words" key, so the exported JSON would carry almost no
+        # timestamps and L3 semantic review could not align anything.
+        if top_words:
+            try:
+                from groq_word_adapter import _assign_words_to_segments
+                for seg, ws in zip(segments,
+                                   _assign_words_to_segments(top_words, segments)):
+                    if ws:
+                        seg["words"] = ws
+            except Exception as e:
+                print(f"warning: word re-attach failed ({e})", file=sys.stderr)
+        # Always export word-timestamps JSON so L3 re-segmentation needs no
+        # re-transcription. --export-refined overrides the default path.
+        export_refined_json(
+            segments,
+            args.export_refined or (str(output_path) + ".words.json"),
+        )
+        export_cleanup_audit(cleanup_audit, output_path)
+        write_srt(segments, output_path)
+        print(f"done! {len(segments)} segments -> {output_path}", file=sys.stderr)
+        return output_path
+
+    if engine == "auto":
+        if plat["is_macos"] and plat["is_arm"]:
+            engine = "mlx"
+        else:
+            engine = "faster-whisper"
+
+    if engine == "mlx":
+        model_name = "mlx-community/whisper-large-v2-mlx"
+    else:
+        model_name = "large-v2"
+
+    if engine == "mlx" and not (plat["is_macos"] and plat["is_arm"]):
+        print("warning: mlx engine requires macOS arm64, falling back to faster-whisper",
+              file=sys.stderr)
+        engine = "faster-whisper"
+        model_name = "large-v2"
+
+    print(f"audio duration: {audio_dur:.0f}s", file=sys.stderr)
+    print(f"vad: {'on' if vad_enabled else 'off'}", file=sys.stderr)
+
+    seg_func = transcribe_mlx if engine == "mlx" else transcribe_faster
+    segments = seg_func(
+        str(audio_path), model_name, lang,
+        args.max_line_length, pause_threshold, args.max_line_ms,
+        vad=vad_enabled, cleanup_audit=cleanup_audit,
+    )
+
+    # Always export word-timestamps JSON so L3 re-segmentation needs no
+    # re-transcription. --export-refined overrides the default path.
+    export_refined_json(
+        segments,
+        args.export_refined or (str(output_path) + ".words.json"),
+    )
+    export_cleanup_audit(cleanup_audit, output_path)
+    write_srt(segments, output_path)
+    print(f"done! {len(segments)} segments -> {output_path}", file=sys.stderr)
+    return output_path
+
+
+if __name__ == "__main__":
+    main()

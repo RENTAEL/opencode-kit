@@ -1,0 +1,55 @@
+{
+  "example-api": {
+    "project_path": "/path/to/project/example-api",
+    "pyenv_env_name": "api-env",
+    "env_file": ".env.local",
+    "load_env_before_commands": true,
+    "commands": {
+      "setup": "pyenv activate api-env && source .env.local && pip install -r requirements.txt",
+      "migrate": "python manage.py migrate",
+      "makemigrations": "python manage.py makemigrations",
+      "test": "python manage.py test",
+      "test_coverage": "coverage run --source='.' manage.py test && coverage report",
+      "runserver": "python manage.py runserver 0.0.0.0:8000",
+      "createsuperuser": "python manage.py createsuperuser"
+    },
+    "test_paths": ["apps/"],
+    "python_version": "3.10",
+    "first_time_setup": true,
+    "configured_at": "2026-05-07T16:30:00Z"
+  },
+  "example-service": {
+    "project_path": "/path/to/project/example-service",
+    "pyenv_env_name": "service-env",
+    "env_file": ".env.local",
+    "load_env_before_commands": true,
+    "commands": {
+      "setup": "pyenv activate service-env && source .env.local && pip install -r requirements.txt",
+      "migrate": "python manage.py migrate",
+      "makemigrations": "python manage.py makemigrations",
+      "test": "python manage.py test",
+      "runserver": "python manage.py runserver"
+    },
+    "test_paths": ["apps/"],
+    "python_version": "3.10",
+    "first_time_setup": true,
+    "configured_at": "2026-05-07T16:30:15Z"
+  },
+  "example-platform": {
+    "project_path": "/path/to/project/example-platform",
+    "pyenv_env_name": "platform-env",
+    "env_file": ".env.local",
+    "load_env_before_commands": true,
+    "commands": {
+      "setup": "pyenv activate platform-env && source .env.local && pip install -r requirements.txt",
+      "migrate": "python manage.py migrate",
+      "makemigrations": "python manage.py makemigrations",
+      "test": "python manage.py test",
+      "runserver": "python manage.py runserver"
+    },
+    "test_paths": ["apps/"],
+    "python_version": "3.10",
+    "first_time_setup": true,
+    "configured_at": "2026-05-07T16:30:30Z"
+  }
+}

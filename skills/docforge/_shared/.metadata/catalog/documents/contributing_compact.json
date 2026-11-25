@@ -1,0 +1,33 @@
+{
+  "id": "contributing_compact",
+  "type": "compact-doc",
+  "title": "Contributing",
+  "summary": "Compact contributing section: ownership in one file",
+  "contract_file": "content/compact/contracts/contributing.md",
+  "path": "docs/contributing.md",
+  "group": "contributing",
+  "selection": {
+    "mode": "compact",
+    "min_tier": "diligence",
+    "selectors": {},
+    "condition": null
+  },
+  "instruction_file": "content/compact/instructions.md",
+  "requires": [
+    "git_history"
+  ],
+  "target_depth": "orientation",
+  "answer_shape": "merged-section-spine",
+  "write_order": 85,
+  "nav_order": 45,
+  "provenance_mode": "sections",
+  "audit_profile": "standard",
+  "dominant_form": null,
+  "template_file": "content/compact/templates/contributing.template.md",
+  "contract_revision": "3.0.0",
+  "compact_target": "docs/contributing.md",
+  "compact_members": [
+    "contributing_index",
+    "ownership"
+  ]
+}

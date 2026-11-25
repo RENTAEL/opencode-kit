@@ -1,0 +1,15 @@
+# --- Per-user self-learning memory: NEVER publish personal learnings ---
+# The committed seed lives in LEARNINGS.template.md. On first run the skill
+# copies it to LEARNINGS.md, which stays local to each machine and grows
+# only for that user. Keeping it ignored means your private corrections are
+# never pushed, and clones start fresh instead of inheriting your learnings.
+LEARNINGS.md
+
+# --- OS / editor junk ---
+.DS_Store
+Thumbs.db
+*.swp
+*~
+.idea/
+.vscode/
+__pycache__/

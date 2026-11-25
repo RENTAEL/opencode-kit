@@ -1,0 +1,33 @@
+{
+  "id": "web_rendering",
+  "type": "rendering",
+  "summary": "Lifecycle, boundaries, transitions, failure and recovery behavior",
+  "contract_file": "content/architecture/contracts/rendering.md",
+  "path": "docs/architecture/rendering.md",
+  "group": "architecture",
+  "selection": {
+    "mode": "static",
+    "min_tier": "spine",
+    "selectors": {
+      "shapes": [
+        "website",
+        "web-app"
+      ]
+    },
+    "condition": null
+  },
+  "instruction_file": "content/architecture/instructions.md",
+  "requires": [
+    "code_graph"
+  ],
+  "target_depth": "deep-dive",
+  "answer_shape": "answer-first",
+  "write_order": 18,
+  "provenance_mode": "sections",
+  "audit_profile": "architecture",
+  "dominant_form": "stateDiagram-v2",
+  "contract_revision": "3.0.0",
+  "template_file": "content/architecture/templates/rendering.md",
+  "compact_group": "architecture_compact",
+  "compact_order": 29
+}

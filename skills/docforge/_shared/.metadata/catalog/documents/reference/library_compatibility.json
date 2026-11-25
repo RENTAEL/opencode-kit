@@ -1,0 +1,33 @@
+{
+  "id": "library_compatibility",
+  "type": "compatibility",
+  "summary": "Supported versions/platforms, tested matrix, deprecation behavior",
+  "contract_file": "content/reference/contracts/compatibility.md",
+  "path": "docs/reference/compatibility.md",
+  "group": "reference",
+  "selection": {
+    "mode": "static",
+    "min_tier": "spine",
+    "selectors": {
+      "shapes": [
+        "library-sdk"
+      ]
+    },
+    "condition": null
+  },
+  "instruction_file": "content/reference/instructions.md",
+  "requires": [
+    "manifests"
+  ],
+  "target_depth": "reference",
+  "answer_shape": "coverage-matrix",
+  "write_order": 66,
+  "nav_order": 68,
+  "provenance_mode": "sections",
+  "audit_profile": "standard",
+  "dominant_form": "table",
+  "contract_revision": "3.0.0",
+  "template_file": "content/reference/templates/compatibility.md",
+  "compact_group": "reference_compact",
+  "compact_order": 17
+}

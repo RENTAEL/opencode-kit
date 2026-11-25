@@ -1,0 +1,263 @@
+# Graph sources
+
+This file owns graph preparation, provider selection, native query dispatch,
+setup, and refresh policy. Docforge does not replace a provider's index with
+a weaker directory scan. It detects and reuses the provider's persisted
+graph, then uses the provider's own skill, MCP server, CLI, or read-only JSON
+reader to answer narrow evidence questions.
+
+Generated documents remain provider-neutral: they name repository facts and
+the capabilities used to establish them, never the command used to retrieve
+them.
+
+## Capabilities
+
+- `code_graph`: structure, symbols, modules, layers, calls, imports, and
+  dependency edges. This is universal for a repository that has source of its
+  own — see [`../../rules.md`](../../rules.md) "Code-graph precondition" for
+  the narrow Portfolio-collection-root exception when it does not.
+- `flow_graph`: actors, triggers, ordered business steps, decisions, and
+  outcomes. This is required only by selected catalog documents that list it.
+
+A provider index is prepared before document synthesis, not copied into the
+documentation tree. The manifest records which documents need which
+capabilities; provenance records the repository sources used for claims.
+
+## Provider-native lifecycle
+
+| Provider | Persisted artifact | Native strengths | Native read path | Refresh behavior |
+|---|---|---|---|---|
+| Understand Anything | `.ua/knowledge-graph.json` and `.ua/domain-graph.json` (legacy `.understand-anything/`) | shareable code-graph JSON; semantic summaries; native flows and steps | Understand Anything skills for exploration; `read_graph.{py,js}` for deterministic JSON inventory (see [`../../runtime/graph/README.md`](../../runtime/graph/README.md)) | `/understand` is incremental; optional auto-update hook |
+| GitNexus | `.gitnexus/lbug` plus index metadata | calls, dependencies, communities, indexed execution processes, change/impact views | GitNexus MCP tools/resources or project-local CLI; optional read-only LadybugDB inventory | `analyze` refreshes the index; compare indexed commit with `HEAD` |
+| CodeGraph | `.codegraph/codegraph.db` | current source, symbol relationships, call paths, routes, and blast radius in one query | `codegraph_explore` MCP tool (or its CLI equivalent when the skill directs it) | watcher and connect-time reconciliation; `status`/`sync` for exceptional manual checks |
+
+The dedicated references contain the exact provider commands and query
+recipes:
+
+- [`graph-source-understand-anything.md`](graph-source-understand-anything.md)
+- [`graph-source-gitnexus.md`](graph-source-gitnexus.md)
+- [`graph-source-codegraph.md`](graph-source-codegraph.md)
+
+When those provider capabilities are installed, dispatch through their native
+agent surfaces instead of reconstructing the same query with filesystem tools:
+
+| Need | Understand Anything | GitNexus | CodeGraph |
+|---|---|---|---|
+| build/update structure | `understand` skill | `gitnexus-cli` skill (`analyze`) | approved `codegraph init`; watcher thereafter |
+| architecture/how it works | `understand-chat` or `understand-explain` | `gitnexus-exploring` | `codegraph_explore` |
+| flows | `understand-domain` | process resources through `gitnexus-exploring` | provisional derivation from structural paths |
+| change/blast radius | `understand-diff` | `gitnexus-impact-analysis` / `detect_changes` | `codegraph_explore` blast-radius output |
+
+Once a provider is locked (see `## Session persistence`), read through **that
+provider's** column. The other columns are not alternatives to reach for
+mid-session: an unselected provider's MCP is corroboration at most, and
+answering a question from it produces evidence whose provenance names the
+provider the user declined. If the locked provider genuinely cannot answer a
+need, say so and derive — do not switch columns silently.
+
+Skill invocation spelling is host-specific. On Codex, Understand Anything uses
+the installed `$understand*` skills; on slash-command hosts it uses
+`/understand*`. GitNexus skills call its MCP tools/resources according to
+their own contract.
+
+## Selection
+
+Run `precheck_graph.{py,js} --need code` (see
+[`../../runtime/graph/README.md`](../../runtime/graph/README.md)). One
+readable provider is sufficient; Docforge does not require or benefit from
+building every supported provider index.
+
+- Exactly one source ready → select it as the proposed default and report only
+  that source, its artifact, capabilities, and read mechanism.
+- Several sources ready → present only those ready sources and ask which
+  should be primary.
+- None ready → present setup paths for the providers that could satisfy the
+  missing capability.
+
+An absent provider is not a readiness gap when another source already
+supplies `code_graph`. Do not show "not detected," "not indexed," or "needs
+build" rows for unused competitors in the standard intake or plan. Show them
+only for an explicit compare/switch request or all-provider diagnostics.
+
+- Prefer Understand Anything when its shareable JSON or native domain/flow
+  graph is the main advantage.
+- Prefer GitNexus when execution processes, communities, change impact, or
+  cross-symbol traces are the dominant evidence need.
+- Prefer CodeGraph when fast, current structural exploration with returned
+  source and call paths is the dominant need.
+
+If several are ready, use unselected ready sources as corroboration only
+when useful. Under `--auto-accept`, select the first ready provider in
+registry order, state the choice, and continue — this is the same
+registry-priority pick `init` locks in automatically (see "Session
+persistence" below); under `--auto-accept` there is no explicit choice to
+thread through as `--graph-provider`. Never merge incompatible provider
+schemas into a synthetic "master graph."
+
+GitNexus with a readable `.gitnexus/lbug` and indexed Process nodes supplies
+both `code_graph` and native `flow_graph`; neither Understand Anything nor
+CodeGraph needs to exist for Docforge to plan and write documents. CodeGraph
+with a readable `.codegraph/codegraph.db` (and a session-wired
+`codegraph_explore`) is equally sufficient for `code_graph`; absent Understand
+Anything or GitNexus indexes must not appear in that plan. Do not invent a
+combined "Understand Anything + GitNexus" readiness claim unless both were
+actually READY and the user selected a primary.
+
+## Session persistence
+
+`manage_manifest.{py,js} init` locks the selected provider into the manifest
+automatically, as part of the same write that creates it — no separate
+command in the common path. With no `--graph-provider` flag, it auto-picks
+the highest-priority ready source in registry order (the same order
+`--auto-accept` already uses above); pass `--graph-provider <id>` only when
+this file's `## Selection` question above was actually asked and answered
+(several sources ready, user chose one). Either way the resolved `flow`
+(`native` / `derived` / `none`) is computed and stored alongside it — never
+a flag.
+
+The stored `flow` describes **the locked provider only**, not the repository.
+A session locked to CodeGraph records `derived` or `none` even when an
+unrelated `.ua/domain-graph.json` sits in the same repo, because CodeGraph
+advertises no `flow_graph` — see the rule below against ever claiming
+"Native flow source: CodeGraph".
+
+Every later step reads the lock from `manifest["graph"]` and never re-runs
+`precheck_graph.{py,js}` or re-asks the user — including a freshly spawned
+parallel document-writer, which never goes through `## Selection` itself
+(see [`../parallel-execution.md`](../parallel-execution.md) and
+[`../../workflows/writing.md`](../../workflows/writing.md)). A manifest
+missing `graph` (written before this convention existed, or resumed from one)
+self-heals via `manage_manifest.{py,js} set-graph --repo <repo>` with no
+other flags — same automatic, registry-priority pick.
+
+Switching the locked provider mid-session requires
+`set-graph --provider <id> --force`; without `--force` it fails loudly rather
+than silently changing what a parallel worker relied on. Relocking is a
+deliberate action for a fresh planning pass, never something the writing loop
+does on its own.
+
+### How the runtime enforces it
+
+The lock is not a convention the agent has to remember — the scripts read it.
+`graph_source_registry.{py,js}` exposes `resolve_locked(repo, capability)`, the
+one resolver every step that picks a provider for real work goes through
+(`derive_flow_graph`, `flow_index` harvest). It returns the chosen source plus
+an `origin`:
+
+| `origin` | meaning |
+|---|---|
+| `lock` | the locked provider supplies the capability; authoritative |
+| `priority` | no lock recorded — registry-order fallback, reported as such |
+| `lock-stale` | a lock exists but its graph is gone from disk |
+| `lock-uncapable` | the locked provider does not advertise that capability |
+
+`resolve_first_ready` remains the lock-blind, registry-order resolver: correct
+only for callers that run *before* a lock exists. `precheck_graph.{py,js}` and
+`diagnose_graphs.{py,js}` are deliberately lock-free — reporting every ready
+provider is what makes the `## Selection` question above possible in the first
+place.
+
+`derive_flow_graph prepare` records the origin as `sourceOrigin` in
+`.docforge/tmp/flow-context.json` and prints it (`source: codegraph
+[session lock]`), so a run can be seen to have honored the choice.
+
+A `lock-stale` graph **fails the step loudly** rather than falling back: the
+provider decides the read mechanism and the entry-point seeds, so substituting
+another one would change the shape of the analysis mid-session while documents
+already written cite the locked provider in their provenance. The remedy is the
+deliberate one — rebuild the graph, or
+`set-graph --provider <id> --force`.
+
+A locked provider with no `flow_graph` (`lock-uncapable`) is not an error: it is
+the normal derive path below. It must never borrow an unselected provider's
+native flows — that would both mislabel provenance and break the rule against
+merging provider schemas.
+
+## Preparation and authority
+
+Detection, readiness checks, status checks, and queries are read-only and may
+be agent-run. Side effects remain deliberately separate:
+
+- repository index build or refresh may be agent-run only after explicit user
+  approval;
+- global install, MCP configuration, plugin/skill installation, and
+  restart-requiring setup are user-run;
+- provider commands that generate `AGENTS.md`, `CLAUDE.md`, hooks, or other
+  repository files must be disclosed before approval;
+- `--auto-accept` never supplies approval for any of these actions.
+
+After a build or refresh, rerun `precheck_graph.{py,js} --need code`. Do not
+require a flow graph yet unless the active manifest contains a selected
+document whose `requires` includes `flow_graph`.
+
+## Query before planning
+
+Use the selected provider's native interface to collect a planning inventory:
+
+1. repository/module boundaries and deployable or published units;
+2. entry points, routes, jobs, commands, and public interfaces;
+3. main dependencies and cross-layer call paths;
+4. candidate functional areas and flows;
+5. hotspots, tests, configuration reads, and operational surfaces.
+
+Then inspect manifests, current docs, and history. This evidence determines
+the tier, profiles, conditions, and dynamic entries in the manifest. The plan
+is therefore graph-grounded rather than a generic tier skeleton.
+
+For each document, make another narrow provider-native query for its
+contract. Examples:
+
+- architecture: boundaries, representative symbols, layer edges, and paths;
+- process/flow views: native process steps or provisional flow candidates,
+  then source confirmation of decisions and failures;
+- setup/configuration: graph entry points plus manifests and environment
+  reads;
+- risks: high fan-in/out paths, hotspots, dependency boundaries, and history;
+- agent context: the smallest source-backed routes, patterns, tests, and
+  constraints an editing agent needs.
+
+## Flow resolution
+
+Resolve flow data native-first. The numbered list below is a **fallback
+order**, not a readiness claim for the plan summary — report only providers
+that `precheck_graph.{py,js}` marked READY, and never echo "Understand
+Anything + GitNexus" when one or both are absent:
+
+1. use Understand Anything's native flow graph when ready;
+2. use GitNexus indexed processes when ready;
+3. otherwise derive `.docforge/tmp/flow-graph.json` from the selected code
+   graph through [`flow-derivation.md`](flow-derivation.md).
+
+Once a provider is locked, the lock outranks this order: steps 1 and 2 apply
+only to *the locked provider's* native flows. A session locked to CodeGraph goes
+straight to step 3 even with a ready `.ua/domain-graph.json` in the repo —
+`flow_index harvest` and `derive_flow_graph` both resolve through
+`resolve_locked`, so they will not harvest a provider the user declined.
+
+CodeGraph is first-class for `code_graph` and an excellent derivation input,
+but it has no native `flow_graph`. When CodeGraph is the only ready code
+graph (or the selected primary has no native flow capability), the Capability
+Schedule must say **Docforge-derived (provisional)**, never "Native flow
+source: CodeGraph".
+
+Before choosing flow documents, harvest the complete
+`.docforge/flow-index.json` through `flow_index.{py,js}` (see
+[`../../runtime/flows/README.md`](../../runtime/flows/README.md)). There
+are no provider flags: Understand Anything graphs are read in place,
+GitNexus flows arrive as the auto-discovered
+`.docforge/tmp/gitnexus-flows.json` interchange the agent materializes
+from the MCP or the lbug reader, and a code graph without native flows
+feeds derived candidates through `derive_flow_graph prepare` + agent
+analysis + `flow_index import --analysis`. GitNexus
+Process nodes are grouped by `entryPointId`; they are candidate path
+evidence, not one document each. Understand Anything native flow nodes are
+confirmed entries, then its knowledge graph is scanned for additional
+candidates because a domain graph may cover only the main flows. The rendered
+`docs/flows/README.md` matrix retains main and deferred candidates; only main
+entries become dynamic flow documents.
+
+The derived result is explicitly provisional. Confirm business rules and
+failure behavior against source before publishing them. Containment edges do
+not establish execution order. CodeGraph can provide excellent structural
+paths, routes, and source for derivation, but Docforge does not relabel that
+code graph as a native business flow graph.

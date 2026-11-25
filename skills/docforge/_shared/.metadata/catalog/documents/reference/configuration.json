@@ -1,0 +1,37 @@
+{
+  "id": "configuration",
+  "type": "configuration",
+  "summary": "Every read setting, default, scope, sensitivity, validation",
+  "contract_file": "content/reference/contracts/configuration.md",
+  "path": "docs/reference/configuration.md",
+  "group": "reference",
+  "selection": {
+    "mode": "static",
+    "min_tier": "spine",
+    "selectors": {},
+    "condition": null
+  },
+  "instruction_file": "content/reference/instructions.md",
+  "requires": [
+    "code_graph",
+    "manifests"
+  ],
+  "target_depth": "reference",
+  "answer_shape": "lookup",
+  "write_order": 61,
+  "nav_order": 61,
+  "provenance_mode": "sections",
+  "audit_profile": "standard",
+  "dominant_form": "flowchart",
+  "contract_revision": "3.0.0",
+  "template_file": "content/reference/templates/configuration.md",
+  "compact_group": "reference_compact",
+  "compact_order": 2,
+  "illustration_views": [
+    {
+      "form": "flowchart",
+      "section": "Sources and precedence",
+      "question": "when several sources define the same value, which one wins"
+    }
+  ]
+}

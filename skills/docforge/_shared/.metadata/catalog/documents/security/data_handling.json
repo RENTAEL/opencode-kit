@@ -1,0 +1,29 @@
+{
+  "id": "data_handling",
+  "type": "data-handling",
+  "summary": "Data classes, lifecycle, access, retention, deletion",
+  "contract_file": "content/security/contracts/data-handling.md",
+  "path": "docs/security/data-handling.md",
+  "group": "security",
+  "selection": {
+    "mode": "static",
+    "min_tier": "diligence",
+    "selectors": {},
+    "condition": null
+  },
+  "instruction_file": "content/security/instructions.md",
+  "requires": [
+    "code_graph",
+    "manifests"
+  ],
+  "target_depth": "deep-dive",
+  "answer_shape": "entry-catalog",
+  "write_order": 78,
+  "provenance_mode": "sections",
+  "audit_profile": "risk",
+  "dominant_form": "table",
+  "contract_revision": "3.0.0",
+  "template_file": "content/security/templates/data-handling.md",
+  "compact_group": "security_compact",
+  "compact_order": 3
+}

@@ -1,0 +1,287 @@
+name: academic-thesis-writer
+version: "1.0.0"
+description: "Akademik tez yazım sistemi — kaynak doğrulama, kanıt grafiği, atıf denetimi, PRISMA protokolü"
+author: "latif-erdogdu"
+license: "Academic use only"
+
+# Minimum OpenCode sürümü
+opencode_version: ">=0.2.0"
+
+# Skill giriş noktası
+entry:
+  skill: "SKILL.md"
+
+# Çalıştırma modeli. Bu blok YORUM DEĞİL, SÖZLEŞMEDİR: değerleri diskteki
+# gerçeklikle karşılaştırılır
+# (tests/contract_tests/test_skill_paketi_sozlesmesi.py).
+#
+# execution_root: repo  ->  skill dizini TEK BAŞINA çalıştırılamaz.
+# 10 komutun handler'ı `python -m tools.atw.cli`; 4 hook'un komutu
+# `python .opencode/skills/.../hooks/x.py`. `tools/` depo kökündedir ve
+# skill dizininde bulunmaz. Bu yüzden skill dizinini ~/.agents/skills/
+# altına aynalamak YALNIZCA metadatası yükler, hiçbir komut
+# çalıştıramaz.
+#
+# skill dizini yalnızca ŞU dört şeyi tutar: SKILL.md, skill.yaml,
+# agents/, hooks/. agents[].file yolları buradan çözülür. Diğer her yol
+# (references/ workflows/ templates/ schemas/ tools/) DEPO KÖKÜNDEN
+# çözülür. Bu ayrım SOKMAYI önlemek için testle zorlanır: skill
+# dizinine içerik ağacı kopyalanırsa ikinci kaynak oluşur ve kopya
+# sessizce baylar — aynı tuzak daha önce `agents/` için yaşandı.
+runtime:
+  execution_root: repo
+  skill_dir_contents:
+    - SKILL.md
+    - skill.yaml
+    - agents/
+    - hooks/
+  # Bunlar skill dizininden cozulur:
+  skill_relative_roots:
+    - agents/
+  # Bunlar depo kokunden cozulur:
+  repo_relative_roots:
+    - references/
+    - workflows/
+    - templates/
+    - schemas/
+    - tools/
+
+# Agent tanımları.
+# DİKKAT: file yolları SKILL DİZİNİNE göre çözümlenir (tools[] ise depo
+# köküne göre — bkz. aşağıdaki not).
+# Depo kökünde agents/ altında aynı 10 dosyanın kaynak kopyası durur.
+# Bu kopya KASITLIDIR ama nedeni baska: skill yukleyicisi agents[].file
+# yollarını SKILL DİZİNİNE göre çözer, o yüzden dosyalar
+# orada olmak ZORUNDA. Kaynak depo köküdür.
+# Skill dizini tek basina bir calistirma ortami DEGILDIR (bkz. runtime
+# blogu): 10 komutun handler'i `python -m tools.atw.cli` ve `tools/` bu
+# dizinde yoktur. Kopya calistirilabilirlik icin degil, skill'in ajanlari
+# okuyabilmesi icin vardir.
+# Senkron 4 testle zorlanır (tests/integration_tests/test_repo_butunlugu.py):
+# ajan kümeleri eşit, kök SKILL.md ile kopya aynı, her ajan dosyası
+# byte-özdeş. Kayma daha önce gerçekleştiği için bu testler yazıldı.
+# (Bu satırda önce ".opencode/agent/ altına kopyalanır" yazıyordu; o dizin
+#  diskte var ama BOŞ — betimlenen kopyalama adımı hiç gerçekleşmemiş.)
+agents:
+  - name: researcher
+    description: "Araştırma sorusuna uygun kaynak keşfi, arama stratejisi, sistematik tarama"
+    file: "agents/researcher.md"
+    tools:
+      - source_search
+      - source_verify
+      - pdf_extract
+      - citation_check
+
+  - name: source-verifier
+    description: "Crossref, OpenAlex, Semantic Scholar ile DOI/bibliyografik doğrulama (en az 2 bağımsız kaynak)"
+    file: "agents/source-verifier.md"
+    tools:
+      - source_verify
+
+  - name: evidence-extractor
+    description: "Doğrulanmış PDF'lerden sayfa/bölüm düzeyinde kanıt çıkarma, claim-evidence linking"
+    file: "agents/evidence-extractor.md"
+    tools:
+      - pdf_extract
+
+  - name: gap-analyzer
+    description: "Literatür matrisinden araştırma boşluklarını çıkarma (yöntemsel, popülasyon, coğrafi, teorik)"
+    file: "agents/gap-analyzer.md"
+    tools:
+      - source_search
+      - source_verify
+
+  - name: contradiction-analyzer
+    description: "Aynı konuda farklı sonuçlara varan çalışmaları bulma, boyut boyunca karşılaştırma"
+    file: "agents/contradiction-analyzer.md"
+    tools:
+      - source_search
+      - source_verify
+      - citation_check
+
+  - name: writer
+    description: "Sadece doğrulanmış girdilerle (kaynak+kanıt+iddia) tez bölümlerini yazma"
+    file: "agents/writer.md"
+    tools:
+      - citation_check
+
+  - name: citation-auditor
+    description: "Metin-kaynakça bütünlüğü, APA 7 format, kaynak varlığı, sahte atıf tespiti"
+    file: "agents/citation-auditor.md"
+    tools:
+      - citation_check
+
+  - name: methodology-auditor
+    description: "Araştırma sorusu ↔ yöntem uyumu (RQ2 nitel ama yöntem nicel → hata)"
+    file: "agents/methodology-auditor.md"
+
+  - name: consistency-auditor
+    description: "20 madde: terminoloji, sayılar, tarihler, örneklem, yöntem, bulgular, atıflar"
+    file: "agents/consistency-auditor.md"
+
+  - name: integrity-auditor
+    description: "Uydurma kaynak, kanıtsız iddia, retraksiyon, kopuk atıf — 5 aşamalı denetim"
+    file: "agents/integrity-auditor.md"
+
+# Araç tanımları.
+# DİKKAT: file yolları DEPO KÖKÜNE göre çözümlenir, skill dizinine göre değil
+# (skill dizininde tools/ klasörü yoktur). Araç kodu CLI ile paylaşılır ve
+# depo kökünde durur. agents[].file bundan FARKLIDIR: skill dizinine göre
+# çözülür. İki kural da test_skill_yaml_contracts.py ile zorlanır.
+tools:
+  - name: source_search
+    description: "Crossref, OpenAlex, Semantic Scholar, PubMed, Google Scholar üzerinden kaynak keşfi"
+    file: "tools/source_search/README.md"
+
+  - name: source_verify
+    description: "DOI ve bibliyografik doğrulama (en az 2 bağımsız kaynak, skor ≥0.60)"
+    file: "tools/source_verify/README.md"
+
+  - name: pdf_extract
+    description: "Doğrulanmış PDF'lerden sayfa/bölüm düzeyinde kanıt çıkarma (claim-evidence linking)"
+    file: "tools/pdf_extract/README.md"
+
+  - name: citation_check
+    description: "Atıf-kaynakça bütünlük denetimi (sahte atıf, retraksiyon, APA 7 format)"
+    file: "tools/citation_check/README.md"
+
+# Hooks (OpenCode yaşam döngüsü entegrasyonu)
+hooks:
+  # Yeni tez başlatıldığında thesis_state.json şablonu kopyala
+  - name: thesis-init
+    event: "session_start"
+    condition: "not exists(thesis_state.json)"
+    command: "python .opencode/skills/academic-thesis-writer/hooks/thesis-init.py"
+    description: "Yeni tez için thesis_state.json şablonu oluştur"
+
+  # Her yazım oturumunda Evidence Gate kontrolü
+  - name: evidence-gate
+    event: "pre_write"
+    condition: "matches(path, '.*chapter.*\\.md$')"
+    command: "python .opencode/skills/academic-thesis-writer/hooks/evidence_gate.py {file}"
+    description: "Bölüm yazımından önce kanıt kapısı kontrolü"
+
+  # Atıf ekleme sonrası Writing Gate kontrolü
+  - name: writing-gate
+    event: "post_write"
+    condition: "matches(path, '.*citation.*\\.json$')"
+    command: "python .opencode/skills/academic-thesis-writer/hooks/writing_gate.py {file}"
+    description: "Atıf ekleme sonrası format/bütünlük kontrolü"
+
+  # Otomatik kaynak doğrulama (source.json değiştiğinde)
+  - name: auto-verify-source
+    event: "post_write"
+    condition: "matches(path, '.*source\\.json$')"
+    command: "python .opencode/skills/academic-thesis-writer/hooks/auto_verify.py {file}"
+    description: "Yeni kaynak eklendiğinde otomatik DOI/bibliyografik doğrulama"
+
+# Komutlar (OpenCode slash command olarak kayıtlı)
+commands:
+  - name: thesis:new
+    description: "Yeni tez başlat — thesis_state.json oluştur, araştırma sorusu tanımla"
+    usage: "/thesis:new <tez_id> <başlık>"
+    handler: "python -m tools.atw.cli new {args[0]} {args[1]}"
+
+  - name: thesis:record
+    description: "Ajanın ürettiği JSON kaydını şema + kopuk referans denetiminden geçirip registry'ye yaz (araştırma sorusu, hipotez, iddia, atıf, boşluk, bulgu, ölçüm koleksiyonları). Kayıt ya hep yazılır ya hiç; id verilmezse otomatik atanır. sources/search_runs/evidence_registry/chapters/paragraphs/audit_registry yazılamaz — onların sahibi ayrı komut"
+    usage: "/thesis:record <REGISTRY> --file <KAYIT.json>"
+    handler: "python -m tools.atw.cli record {args[0]} --file {options.file}"
+
+  - name: thesis:search
+    description: "Araştırma sorusu için sistematik kaynak arama başlat"
+    usage: "/thesis:search <RQ-ID> [--databases crossref,openalex,pubmed]"
+    handler: "python -m tools.atw.cli search {args[0]} --databases {options.databases}"
+
+  - name: thesis:verify
+    description: "Kaynakları Crossref + OpenAlex ile DOI/bibliyografik doğrular (en az 2 bağımsız kaynak, skor ≥ 0.60) ve sonucu source.verification alanına yazar. Retraksiyon ve korizyon da denetlenir; geri çekilmiş kaynak doğrulanmış işaretlenmez ve geri çekilmişliği bir daha silinmez"
+    usage: "/thesis:verify [<SRC-ID> …] | /thesis:verify --all"
+    handler: "python -m tools.atw.cli verify {args[0]} --all {options.all}"
+
+  - name: thesis:extract
+    description: "Doğrulanmış PDF'lerden kanıt çıkar (claim-evidence linking)"
+    usage: "/thesis:extract <SRC-ID> --claim <CLM-ID>"
+    handler: "python -m tools.atw.cli extract {args[0]} --claim {options.claim} --pdf {options.pdf}"
+
+  - name: thesis:write
+    description: "Bölüm yazımı: doğrulanmış girdi brifingi üretir; ajanın yazdığı bölüm dosyasını denetleyip kaydeder. --file verilmezse brifing basılır ve tez durumu değişmez — metni yazar ajanı üretir, CLI Türkçe metin yazmaz (Evidence Gate → Writing Gate)"
+    usage: "/thesis:write <CHAPTER-ID> --rq <RQ-ID> [--file <BÖLÜM.json>]"
+    handler: "python -m tools.atw.cli write {args[0]} --rq {options.rq} --file {options.file}"
+
+  - name: thesis:approve
+    description: "PRISMA onay kapısı aç/kapat. Hazırlığı olmayan kapı açılmaz; kapıyı açan başka komut yoktur — bu olmadan yazım ve ihracat hiçbir koşulda ilerlemez"
+    usage: "/thesis:approve <KAPI> [--revoke] | /thesis:approve --list"
+    handler: "python -m tools.atw.cli approve {args[0]} --revoke {options.revoke} --list {options.list}"
+
+  - name: thesis:audit
+    description: "Tam tez denetimi (5 aşama: yapısal, atıf, metodoloji, tutarlılık, yazım)"
+    usage: "/thesis:audit [--type citation|methodology|consistency|integrity|all]"
+    handler: "python -m tools.atw.cli audit --type {options.type}"
+
+  - name: thesis:status
+    description: "Tez durumu özeti (RQ, iddialar, kanıtlar, kaynaklar, boşluklar)"
+    usage: "/thesis:status"
+    handler: "python -m tools.atw.cli status"
+
+  - name: thesis:export
+    description: "Final tez metnini birleştir (bölümler + kaynakça). Ekler dışa aktarılmaz: durum şemasında appendices alanı yok"
+    usage: "/thesis:export [--format md|docx|pdf] [--out DİZİN]"
+    handler: "python -m tools.atw.cli export --format {options.format} --out {options.out}"
+
+# Referans dosyaları. Yolları kökteki references/ klasöründedir
+# (SKILL.md:339-345 de aynı yolları yazar). Bu blok test_skill_yaml_contracts.py
+# tarafından denetlenir: her ad diskte var olmalı ve listede eksik dosya
+# kalmamalıdır. (Önce "agents/references/ içinden kopyalanır" yazıyordu; o
+#  dizin hiç var olmadı.)
+references:
+  - approval_gates.md
+  - citation_rules.md
+  - source_verification.md
+  - evidence_rules.md
+  - academic_integrity.md
+  - research_gap.md
+  - systematic_review_protocol.md
+  - methodology_rules.md
+
+# Şemalar (JSON Schema draft 2020-12)
+schemas:
+  - thesis_state.json
+  - source.json
+  - claim.json
+  - evidence.json
+  - paragraph.json
+  - research_question.json
+  - audit.json
+  - citation.json
+  - research_gap.json
+  - finding.json
+  - discussion.json
+  - conclusion.json
+  - search_run.json
+  - statistic.json
+  - dataset.json
+  - analysis.json
+  - table.json
+  - figure.json
+  - chapter.json
+  - variable.json
+  - hypothesis.json
+
+# Test gereksinimleri
+test_requirements:
+  - pytest>=8.0.0
+  - pytest-cov>=5.0.0
+  - jsonschema>=4.22.0
+  - pyyaml>=6.0.0
+
+# Python sürümü
+python_version: ">=3.9"
+
+# Etiketler
+tags:
+  - academic
+  - thesis
+  - research
+  - citation
+  - verification
+  - prisma
+  - apa7

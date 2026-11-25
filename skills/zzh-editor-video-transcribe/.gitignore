@@ -1,0 +1,11 @@
+venv/
+.venv/
+models/
+tmp/
+.DS_Store
+__pycache__/
+*.pyc
+*.bak
+.agent_harnesses.json
+config.json
+.env

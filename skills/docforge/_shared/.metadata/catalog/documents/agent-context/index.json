@@ -1,0 +1,104 @@
+{
+  "$schema": "../../category-index-schema.json",
+  "version": "2.28.0",
+  "category": "agent-context",
+  "purpose": "Agent-facing context: AGENTS.md and coding-agent views.",
+  "source": "../../index.json",
+  "records": [
+    {
+      "id": "agents_kernel",
+      "path": "agents_kernel.json",
+      "summary": "Concise self-contained operating kernel with verified commands, repository map, precedence, boundaries, and validation"
+    },
+    {
+      "id": "claude_shim",
+      "path": "claude_shim.json",
+      "summary": "Concise self-contained operating kernel with verified commands, repository map, precedence, boundaries, and validation"
+    },
+    {
+      "id": "claude_local",
+      "path": "claude_local.json",
+      "summary": "Self-contained local preference extension with commit and secret-handling boundaries"
+    },
+    {
+      "id": "claude_settings",
+      "path": "claude_settings.json",
+      "summary": "Self-contained safe Claude Code permissions and optional verified validation hook configuration"
+    },
+    {
+      "id": "agents_compact",
+      "path": "agents_compact.json",
+      "summary": "Self-contained compact coding-agent reference with seven independently useful topic sections"
+    },
+    {
+      "id": "agents_architecture",
+      "path": "agents_architecture.json",
+      "summary": "Self-contained component map with durable source paths, entry points, dependency direction, and boundaries"
+    },
+    {
+      "id": "agents_patterns",
+      "path": "agents_patterns.json",
+      "summary": "Self-contained recurring implementation shapes, representative source paths, hotspots, and validation commands"
+    },
+    {
+      "id": "agents_testing",
+      "path": "agents_testing.json",
+      "summary": "Self-contained verified test commands, suite layout, selection patterns, fixtures, mocks, and success criteria"
+    },
+    {
+      "id": "agents_conventions",
+      "path": "agents_conventions.json",
+      "summary": "Self-contained repository-specific safety, naming, structural, and workflow rules"
+    },
+    {
+      "id": "agents_tech_debt",
+      "path": "agents_tech_debt.json",
+      "summary": "Self-contained known limitations, editing hazards, affected source paths, and safe handling constraints"
+    },
+    {
+      "id": "agents_flow",
+      "path": "agents_flow.json",
+      "summary": "Self-contained trigger-to-effect flow lookup grounded in declared flow evidence"
+    },
+    {
+      "id": "agents_glossary",
+      "path": "agents_glossary.json",
+      "summary": "Self-contained definitions for evidenced domain and flow terms with their code context"
+    },
+    {
+      "id": "agents_layer_rule",
+      "path": "agents_layer_rule.json",
+      "summary": "Per-layer scoped rules under .agents/rules/<layer-slug>.md with evidenced conventions, hotspots, and a verified validation command"
+    },
+    {
+      "id": "vendor_codex",
+      "path": "vendor_codex.json",
+      "summary": "Codex shim: verbatim AGENTS.md copy at .codex/instructions.md with provenance header"
+    },
+    {
+      "id": "vendor_cursor",
+      "path": "vendor_cursor.json",
+      "summary": "Cursor shim: AGENTS.md content without H1 at .cursor/rules/agents.mdc with alwaysApply frontmatter"
+    },
+    {
+      "id": "vendor_copilot",
+      "path": "vendor_copilot.json",
+      "summary": "GitHub Copilot shim: verbatim AGENTS.md copy at .github/copilot-instructions.md with provenance header"
+    },
+    {
+      "id": "vendor_windsurf",
+      "path": "vendor_windsurf.json",
+      "summary": "Windsurf shim: AGENTS.md content without H1 at .windsurf/rules/agents.md with provenance header"
+    },
+    {
+      "id": "vendor_aider",
+      "path": "vendor_aider.json",
+      "summary": "Aider shim: verbatim AGENTS.md at CONVENTIONS.md plus an additive merge of the .aider.conf.yml read list"
+    },
+    {
+      "id": "vendor_gemini",
+      "path": "vendor_gemini.json",
+      "summary": "Gemini shim: one-line @AGENTS.md pointer at GEMINI.md"
+    }
+  ]
+}

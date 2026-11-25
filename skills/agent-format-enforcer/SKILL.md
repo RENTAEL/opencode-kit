@@ -1,0 +1,66 @@
+---
+name: agent-format-enforcer
+description: "Enforce the `<Agent_Prompt>` XML wrapper convention on all agent `.md` files in `agents/`."
+---
+# Agent Format Enforcer
+
+Enforce the `<Agent_Prompt>` XML wrapper convention on all agent `.md` files in `agents/`.
+
+## Standard Format
+
+Every agent file MUST follow this structure:
+
+```yaml
+---
+description: Description of the agent's role
+mode: subagent
+---
+<Agent_Prompt>
+  <Role>
+    ...agent instructions...
+  </Role>
+</Agent_Prompt>
+```
+
+## When to Use
+
+- After creating or modifying an agent
+- When onboarding agents from external sources
+- During code review to catch format drift
+- As part of `/verify-hub review` or CI checks
+
+## Usage
+
+```
+# Scan all agents for compliance
+/hub-setup doctor  # delegates to this skill for agent check
+
+# Or manually:
+loadSkill agent-format-enforcer
+```
+
+## What It Checks
+
+| Check | Detail |
+|-------|--------|
+| YAML frontmatter | `---` delimiters present |
+| `description` | Required field |
+| `model` | Optional ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â this config pins no models |
+| `mode` | Required field (subagent or primary) |
+| `<Agent_Prompt>` | Opening wrapper tag present |
+| `<Role>` | Sub-tag inside Agent_Prompt |
+| `</Agent_Prompt>` | Closing wrapper tag present |
+
+## Script
+
+`scripts/check-agent-format.ts` ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â Standalone validation script that:
+- Reads all `agents/*.md` files
+- Validates each against the standard format
+- Reports per-agent compliance
+- Exits 0 if all compliant, 1 if issues found
+- Supports `--fix` to auto-wrap non-compliant files
+
+## Related
+
+- `agent-md-refactor` skill ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â For larger-scale agent file restructuring
+- `hubs-doctor` skill ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â Diagnostic health check that includes agent format validation

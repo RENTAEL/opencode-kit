@@ -1,0 +1,32 @@
+{
+  "id": "po_release_notes",
+  "type": "release-notes",
+  "summary": "Released user impact, version/date, compatibility impact, feature links",
+  "contract_file": "content/product/contracts/release-notes.md",
+  "path": "docs/product/product-owner/release-notes.md",
+  "group": "product",
+  "selection": {
+    "mode": "static",
+    "min_tier": "spine",
+    "selectors": {
+      "audiences": [
+        "product-owners"
+      ]
+    },
+    "condition": null
+  },
+  "instruction_file": "content/product/instructions.md",
+  "requires": [
+    "git_history"
+  ],
+  "target_depth": "reference",
+  "answer_shape": "entry-catalog",
+  "write_order": 50,
+  "provenance_mode": "sections",
+  "audit_profile": "standard",
+  "dominant_form": null,
+  "contract_revision": "3.0.0",
+  "template_file": "content/product/templates/release-notes.md",
+  "compact_group": "po_compact",
+  "compact_order": 14
+}

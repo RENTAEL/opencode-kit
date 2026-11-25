@@ -1,0 +1,40 @@
+# Dashboard runtime
+
+Implementation behind the public `dashboard` launcher pair in
+[`runtime/cli/`](../cli/README.md): builds and serves the local Fumadocs site
+under `<repo>/.docforge/dashboard/`.
+
+- `python/dashboard.py` / `js/dashboard.js` — Python and Node peers of the
+  `scan` / `start` / `export` / `status` / `stop` CLI (see
+  [`workflows/dashboard.md`](../../workflows/dashboard.md) for the lifecycle,
+  flags, and isolation rules). `export` builds the static HTML
+  export (`next build` → `<dashboard>/out/`) instead of serving.
+- `template/` — the static Fumadocs application shell (Next.js 16, Fumadocs
+  UI/MDX, Tailwind 4) copied into the dashboard directory; it is a
+  static-export app (`output: 'export'`, `trailingSlash: true`, `staticGET`
+  search index), so
+  `next build` emits **`index.html` per page** under `out/` (`/docs` →
+  `out/docs/index.html`, never flat `docs.html`). Its `README.md` is
+  part of the scaffolded site, not repository documentation. `app/icon.png`
+  (the Docforge logo) is served automatically by Next.js as the site
+  favicon; replace that file to rebrand.
+
+The runtime consumes the shared codec/util (`runtime.common.python.*` /
+`runtime/common/js/*`) exactly like every other subsystem.
+
+## Provenance storage
+
+The build reconciles and reads document metadata from the folder sidecars
+(`.docforge/provenance/<folder>.json`; `project.provenance_storage` is always
+`json`). A pre-migration document still carrying inline frontmatter is read as
+a legacy fallback (reported `inline`, pending migration); the emitted site
+always carries full frontmatter.
+
+## Where invoked
+
+- [`workflows/dashboard.md`](../../workflows/dashboard.md) — full lifecycle
+  (scan / start / export / status / stop).
+- [`workflows/validation.md`](../../workflows/validation.md) — post-run
+  verification step.
+- `skills/docforge-dashboard/SKILL.md` — the thin optional dashboard
+  entrypoint skill.

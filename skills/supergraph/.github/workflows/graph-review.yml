@@ -1,0 +1,85 @@
+name: Codebase Memory Review
+on:
+  pull_request:
+    branches: [main]
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: '3.12'
+      - name: Install Codebase Memory
+        run: pip install codebase-memory-mcp==0.10.8
+      - name: Index repository
+        run: |
+          set -o pipefail
+          normalize_cbm() { python3 plugins/supergraph/scripts/normalize-codebase-memory-json.py; }
+          codebase-memory-mcp --version | tee cbm-version.txt
+          REPO=$(pwd)
+          codebase-memory-mcp cli --json index_repository --repo-path "$REPO" --name supergraph-ci --mode fast | normalize_cbm > index.json
+          python3 -c 'import json; d=json.load(open("index.json")); assert d.get("status")=="indexed", d'
+          codebase-memory-mcp cli --json index_status --project supergraph-ci | normalize_cbm > index-status.json
+          python3 -c 'import json; d=json.load(open("index-status.json")); assert d.get("project") or d.get("name"), d; assert any(k in d for k in ("nodes","node_count","total_nodes")), d; assert any(k in d for k in ("edges","edge_count","total_edges")), d'
+      - name: Load schema before graph queries
+        run: |
+          set -o pipefail
+          codebase-memory-mcp cli --json get_graph_schema --project supergraph-ci | python3 plugins/supergraph/scripts/normalize-codebase-memory-json.py > graph-schema.json
+          python3 -c 'import json; d=json.load(open("graph-schema.json")); assert d.get("node_labels") and d.get("edge_types"), d'
+      - name: Detect changes and cycles
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          set -o pipefail
+          codebase-memory-mcp cli --json detect_changes --project supergraph-ci --since "origin/$BASE_REF" --format json | python3 plugins/supergraph/scripts/normalize-codebase-memory-json.py > changes.json
+          codebase-memory-mcp cli --json query_graph --project supergraph-ci --query 'MATCH (a)-[:CALLS|IMPORTS]->(b) RETURN a.qualified_name, b.qualified_name LIMIT 100000' | python3 plugins/supergraph/scripts/normalize-codebase-memory-json.py > cycle-edges.json
+          python3 - <<'PY'
+          import json
+          d=json.load(open('changes.json'))
+          assert isinstance(d['changed_files'],list)
+          assert isinstance(d.get('changed_count', d.get('seed_symbols')),int)
+          assert isinstance(d.get('impacted_symbols', d.get('impacted')),list)
+          assert isinstance(d.get('depth', d.get('impacted_total')),int)
+          cycle_data=json.load(open('cycle-edges.json'))
+          assert not cycle_data.get('next_cursor'), 'cycle pagination is incomplete; rerun query with next_cursor'
+          rows=cycle_data['rows']
+          assert len(rows)<100000, 'cycle evidence truncated'
+          adj={}
+          for a,b in rows: adj.setdefault(a,[]).append(b)
+          def cyclic(start,node,depth):
+              return depth<8 and any(n==start or cyclic(start,n,depth+1) for n in adj.get(node,()))
+          cycles=[n for n in adj if cyclic(n,n,0)]
+          json.dump({'cycle_count':len(cycles)},open('cycles.json','w'))
+          PY
+      - name: Graph summary and gates
+        run: |
+          python3 - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import json
+          version=open('cbm-version.txt').read().strip()
+          idx=json.load(open('index.json')); changes=json.load(open('changes.json')); cycles=json.load(open('cycles.json'))
+          print('## Codebase Memory Review')
+          print(f'- Provider version: {version}')
+          print('- Project: supergraph-ci')
+          print(f'- Index status: {idx["status"]}')
+          print(f'- Changed-file count: {changes["changed_count"]}')
+          print(f'- Impacted symbols: {len(changes["impacted_symbols"])}')
+          print(f'- Impact depth: {changes["depth"]}')
+          print(f'- Cycle count: {cycles["cycle_count"]}')
+          PY
+          test "$(python3 -c 'import json; print(json.load(open("cycles.json"))["cycle_count"])')" = 0 || exit 1
+      - name: Run tests
+        run: |
+          if [ -f package.json ]; then npm ci && npm test; fi
+          if [ -f pyproject.toml ]; then pip install -e '.[dev]' && pytest; fi
+          if [ -f go.mod ]; then go test ./...; fi
+          if [ -f Cargo.toml ]; then cargo test; fi
+      - name: Run linter
+        run: |
+          if [ -f package.json ]; then npm run lint; fi
+          if [ -f pyproject.toml ]; then ruff check .; fi
+          if [ -f go.mod ]; then golangci-lint run; fi
+          if [ -f Cargo.toml ]; then cargo clippy -- -D warnings; fi

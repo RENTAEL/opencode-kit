@@ -1,0 +1,117 @@
+# Usage
+
+AutoCode is used from inside OpenCode after the plugin is loaded. It is not a standalone application and does not start a web server or expose a local URL. It registers managed agents, slash commands, generated skills, and tools.
+
+### Primary Agents
+
+| Agent      | Purpose                                                   |
+| ---------- | --------------------------------------------------------- |
+| 👨 `advise` | Research topics, answer questions, and guide manual work. |
+| 📐 `design` | Design and propose solutions.                             |
+| 🤖 `auto`   | **Autonomously** solve problems.                          |
+| 🧑‍💻 `assist` | Assist **interactively** to solve problems.               |
+| 🕵️ `spy`    | Primary, visible, read-only safety review and guidance.   |
+
+### Concept, Design, and Execution Workflow
+
+```mermaid
+flowchart TD
+  Concepts([.agents/concepts])
+  Concepts -- 📐 design --> Design([proposal in current session])
+
+  Design -- 👨 advise --> Advise([manual execution])
+  Design -- 🧑‍💻 assist --> Assist([interactive execution])
+  Design -- 🤖 auto --> Auto([autonomous execution])
+```
+
+Switch any time between `👨 advise` and `🧑‍💻 assist` and `🤖 auto` when work needs a different autonomy level.
+
+### Behavioural Differences
+
+| Agent    | Investigations | Next Action | Apply Changes |
+| -------- | -------------- | ----------- | ------------- |
+| 👨 advise | Autonomous     | Interactive | Human         |
+| 🧑‍💻 assist | Autonomous     | Interactive | AI*           |
+| 🤖 auto   | Autonomous     | Autonomous  | AI*           |
+| 🕵️ spy    | Autonomous     | Stop        | AI            |
+
+*Except dangerous tasks.
+
+### Hybrid Workflow
+
+Combinations of Autonomous and Assisted Workflows are also possible as you can switch any time between `auto` and `assist` agents.
+
+For example you may start in `assist` mode and then later when you get busy, switch to `auto` mode so that agent can continue with your plan without your presence or vice versa.
+
+### Commands
+
+| Command             | Purpose                                                                                  |
+| ------------------- | ---------------------------------------------------------------------------------------- |
+| `/autocode-install` | Start AutoCode installation checks and remediation.                                      |
+| `/assist`           | Same assist session as `/new-assist`.                                                    |
+| `/new-advise`       | Create new 👨 advise session to research topics, answer questions, and guide manual work. |
+| `/new-design`       | Create new 📐 design session to design solution to problem.                               |
+| `/new-auto`         | Create new 🤖 auto session to autonomously solve problems.                                |
+| `/new-assist`       | Create new 🧑‍💻 assist session to semi-autonomously assist with problems/improvements.      |
+| `/new-spy`          | Create new 🕵️ spy session from current context for read-only safety review and guidance.  |
+| `/new-fix`          | Create new session to fix errors or requested issues.                                    |
+| `/job-concepts`     | Save concepts under `.agents/concepts/`.                                                 |
+
+### Concepts and Temporary Workspaces
+
+Concepts are early Markdown descriptions saved in `.agents/concepts/`. `/job-concepts` remains available for creating them.
+
+OpenCode sessions own all workflow and state. Do not use `design.md`, `plan.md`, or `session.yml` as workflow state.
+
+| Path                                             | Purpose                                     |
+| ------------------------------------------------ | ------------------------------------------- |
+| `.agents/concepts/{label}.md`                    | Early concept created with `/job-concepts`. |
+| `.agents/jobs/<timestamp>_<session-title-slug>/` | Temporary workspace for current session.    |
+
+Retained tools create or reuse this temporary workspace on demand. It may hold scripts, sandboxes, REST cache, and similar temporary artifacts.
+
+### Sandbox ownership
+
+Sandboxes are temporary artifacts in current session workspace: `.agents/jobs/<timestamp>_<session-title-slug>/sandboxes/{sandbox_name}`. Retained sandbox tools create or reuse workspace on demand.
+
+Sandbox access, listing, creation, copying, and deletion stay in current session workspace. Same `{sandbox_name}` may exist in separate session workspaces. Legacy `.agents/sandboxes` is untouched and inaccessible.
+
+### Managed Script Workflow
+
+Managed scripts are temporary artifacts in current session workspace:
+
+```text
+.agents/jobs/<timestamp>_<session-title-slug>/scripts/
+├── AGENTS.md
+├── package.json
+├── package-lock.json
+├── node_modules/
+├── src/
+│   └── *.mjs
+├── logs/
+└── services/                  # when applicable
+```
+
+Retained script tools create or reuse this workspace on demand. Logs remain in `scripts/logs/`. Different sessions use separate temporary workspaces.
+
+`scripts/src` is canonical managed `sourceRoot`; runtime fixes it and callers cannot supply another source root. `autocode_script_run` and `autocode_script_service` with `action` `start` accept entries relative to it, such as `task.mjs` or `nested/task.mjs`. Entries reject `src/` prefixes, absolute paths, backslashes, traversal, symlink escapes, broken symlinks, non-files, and extensions other than `.mjs`.
+
+Managed processes use `scripts` root as cwd. `AUTOCODE_SCRIPT_ROOT` is `scripts` root, and `AUTOCODE_WORKSPACE_ROOT` remains unchanged. Dependency specs accept npm registry versions, ranges, and tags only; `file:`, `link:`, relative or absolute paths, URLs, Git sources, and filesystem or network archive sources are rejected.
+
+### Root Session Heading Contract
+
+Only `advise`, `assist`, and `auto` assistant turns are eligible. First eligible text line must be `# {emoji} {title}`. Matching generated parenthesized postfix replaces; other headings append as postfix. Title-update failure is advisory.
+
+### Database inspection
+
+AutoCode can inspect environment-configured databases through read-only tools and the hidden database specialist agent. This capability is intended for safe lookup and analysis, not schema changes, joins across multiple tables, or write operations.
+
+- All database access is read-only.
+- Reads are limited to a single table at a time.
+- Identifiers must be simple schema, table, or field names.
+- Supported filter operators are `=`, `!=`, `<`, `<=`, `>`, `>=`, `like`, `in`, and `is_null`.
+
+## See also
+
+- [Configuration](configuration.md) — database and SSH environment variables.
+- [Terminology](terminology.md) — concept, design, and workspace terms.

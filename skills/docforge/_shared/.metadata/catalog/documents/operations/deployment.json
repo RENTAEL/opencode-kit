@@ -1,0 +1,36 @@
+{
+  "id": "deployment",
+  "type": "deployment",
+  "summary": "Environments, artifact path, rollout, rollback, verification",
+  "contract_file": "content/operations/contracts/deployment.md",
+  "path": "docs/operations/deployment.md",
+  "group": "operations",
+  "selection": {
+    "mode": "static",
+    "min_tier": "diligence",
+    "selectors": {},
+    "condition": null
+  },
+  "instruction_file": "content/operations/instructions.md",
+  "requires": [
+    "code_graph",
+    "manifests"
+  ],
+  "target_depth": "deep-dive",
+  "answer_shape": "entry-catalog",
+  "write_order": 71,
+  "provenance_mode": "sections",
+  "audit_profile": "procedure",
+  "dominant_form": "flowchart",
+  "contract_revision": "3.0.0",
+  "template_file": "content/operations/templates/deployment.md",
+  "compact_group": "operations_compact",
+  "compact_order": 2,
+  "illustration_views": [
+    {
+      "form": "flowchart",
+      "section": "Environments",
+      "question": "which infrastructure nodes run which blocks, per environment"
+    }
+  ]
+}

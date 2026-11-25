@@ -1,0 +1,153 @@
+diff --git a/src/auth/jwt.py b/src/auth/jwt.py
+index e69de29..8b13789 100644
+--- a/src/auth/jwt.py
++++ b/src/auth/jwt.py
+@@ -0,0 +1,42 @@
++import time
++import jwt
++from typing import Optional
++
++TOKEN_EXPIRY_SECONDS = 900  # 15 minutes
++
++
++def create_token(user_id: str, session_data: dict) -> str:
++    """Create a JWT token with sliding expiry."""
++    now = int(time.time())
++    payload = {
++        "sub": user_id,
++        "iat": now,
++        "exp": now + TOKEN_EXPIRY_SECONDS,
++        "data": session_data,
++        "token_type": "access",
++    }
++    secret = get_secret_key()
++    return jwt.encode(payload, secret, algorithm="HS256")
++
++
++def verify_token(token: str) -> Optional[dict]:
++    """Verify and decode a JWT token. Returns None if invalid/expired."""
++    try:
++        secret = get_secret_key()
++        payload = jwt.decode(token, secret, algorithms=["HS256"])
++        return payload
++    except jwt.ExpiredSignatureError:
++        return None
++    except jwt.InvalidTokenError:
++        return None
++
++
++def get_secret_key() -> str:
++    """Retrieve the JWT signing key from environment."""
++    import os
++    key = os.environ.get("JWT_SECRET")
++    if not key:
++        raise RuntimeError("JWT_SECRET environment variable not set")
++    if len(key) < 32:
++        raise RuntimeError("JWT_SECRET must be at least 32 characters")
++    return key
+diff --git a/tests/test_jwt.py b/tests/test_jwt.py
+index e69de29..8b13789 100644
+--- a/tests/test_jwt.py
++++ b/tests/test_jwt.py
+@@ -0,0 +1,38 @@
++import time
++import pytest
++from src.auth.jwt import create_token, verify_token
++
++
++def test_create_and_verify_token():
++    """Should create a valid token and verify it successfully."""
++    token = create_token("user_123", {"role": "admin"})
++    payload = verify_token(token)
++    assert payload is not None
++    assert payload["sub"] == "user_123"
++
++
++def test_expired_token_returns_none():
++    """Should return None for an expired token."""
++    token = create_token("user_456", {"role": "user"})
++    # Fast-forward expiry by sleeping
++    time.sleep(TOKEN_EXPIRY_SECONDS + 1)
++    payload = verify_token(token)
++    assert payload is None
++
++
++def test_invalid_token_returns_none():
++    """Should return None for a tampered token."""
++    payload = verify_token("invalid.token.here")
++    assert payload is None
++
++
++def test_missing_jwt_secret_raises_error():
++    """Should raise RuntimeError when JWT_SECRET is not set."""
++    import os
++    saved = os.environ.pop("JWT_SECRET", None)
++    with pytest.raises(RuntimeError, match="JWT_SECRET environment variable not set"):
++        create_token("test", {})
++    if saved:
++        os.environ["JWT_SECRET"] = saved
+diff --git a/src/payments/stripe.py b/src/payments/stripe.py
+index e69de29..8b13789 100644
+--- a/src/payments/stripe.py
++++ b/src/payments/stripe.py
+@@ -0,0 +1,56 @@
++import hashlib
++import hmac
++import time
++from typing import Optional
++
++import stripe
++
++
++def create_charge(
++    amount_cents: int,
++    currency: str,
++    source: str,
++    order_id: str,
++) -> dict:
++    """Create a Stripe charge with idempotency protection."""
++    idempotency_key = hashlib.sha256(
++        f"{order_id}:{int(time.time() / 60)}".encode()
++    ).hexdigest()
++
++    try:
++        charge = stripe.Charge.create(
++            amount=amount_cents,
++            currency=currency,
++            source=source,
++            idempotency_key=idempotency_key,
++        )
++        return {
++            "id": charge.id,
++            "status": charge.status,
++            "amount": charge.amount,
++            "created": charge.created,
++        }
++    except stripe.error.StripeError as e:
++        return {"error": str(e), "code": e.code}
++
++
++def verify_webhook_signature(
++    payload: bytes,
++    sig_header: str,
++    webhook_secret: str,
++) -> bool:
++    """Verify that a webhook was sent by Stripe."""
++    try:
++        event = stripe.Webhook.construct_event(
++            payload, sig_header, webhook_secret
++        )
++        return event.type
++    except ValueError:
++        return None
++    except stripe.error.SignatureVerificationError:
++        return None
+diff --git a/requirements.txt b/requirements.txt
+index e69de29..8b13789 100644
+--- a/requirements.txt
++++ b/requirements.txt
+@@ -1,3 +1,4 @@
+ flask==2.3.0
+ requests==2.31.0
+ stripe==5.4.0
++pyjwt==2.8.0

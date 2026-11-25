@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/latif-erdogdu/academic-thesis-writer/schemas/evidence.json",
+  "title": "Kanit",
+  "description": "Bir kaynagin tam metninden sayfa ve bolum duzeyinde cikarilmis, tek bir iddiayi destekleyen veya zayif haliyla iliskilendiren alinti.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["id", "source_id", "location", "text", "evidence_type", "strength"],
+  "examples": [
+    {
+      "$comment": "KURGUSAL ORNEK. Alinti metni uydurmadir ve herhangi bir gercek kaynaga ait degildir.",
+      "id": "EVD-001",
+      "source_id": "SRC-001",
+      "location": { "page": 17, "section": "3.2", "paragraph": null },
+      "text": "Kurgusal ornek metin: incelenen yontem basari oranini belirgin bicimde artirmistir.",
+      "evidence_type": "literature",
+      "supports_claim": "CLM-001",
+      "strength": "direct",
+      "verified": false,
+      "extracted_at": "2026-09-26T10:15:00+00:00",
+      "extraction_method": "pdf_text_layer",
+      "notes": ""
+    }
+  ],
+  "properties": {
+    "$comment": { "type": "string" },
+    "id": { "type": "string", "pattern": "^EVD-\\d{3,}$" },
+    "source_id": { "type": "string", "pattern": "^SRC-\\d{3,}$" },
+    "location": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["page", "section", "paragraph"],
+      "properties": {
+        "page": { "type": ["integer", "null"], "minimum": 1 },
+        "section": { "type": "string" },
+        "paragraph": { "type": ["integer", "null"], "minimum": 1 }
+      }
+    },
+    "text": { "type": "string", "minLength": 1 },
+    "evidence_type": {
+      "enum": ["literature", "primary_data", "statistical", "finding", "method", "theory"]
+    },
+    "supports_claim": { "type": ["string", "null"], "pattern": "^CLM-\\d{3,}$" },
+    "strength": { "enum": ["direct", "indirect"] },
+    "verified": { "type": "boolean", "default": false },
+    "extracted_at": { "type": "string" },
+    "extraction_method": {
+      "enum": ["pdf_text_layer", "pdf_ocr", "manual", "user_provided"]
+    },
+    "notes": { "type": "string" }
+  }
+}

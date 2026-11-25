@@ -1,0 +1,87 @@
+# Docforge command help
+
+Canonical `--help` reference for the three Docforge entrypoints. Slash
+commands and skills route `--help` here instead of running a workflow: show
+the matching section verbatim and stop.
+
+## `/docforge`
+
+Purpose: fresh-start documentation mode — plan and write new documentation
+from repository evidence, driven by the Docforge catalog, with bounded
+repository-evidence retrieval, manifest metadata, independent audits, and
+equivalent Python/Node tools.
+
+| Parameter | Meaning |
+|---|---|
+| *(none)* | Interactive intake → plan → write, then validate and (unless skipped) auto-serve the dashboard. Flow documents are confirmed at the write-start flow gate (mandatory user selection — never auto-accepted), not at intake |
+| `--plan-only` | Analyze and show the plan / dry-run tree; do not write or re-ground document bodies |
+| `--auto-accept` | Display plans/trees/results, then continue without routine conversational pauses. Never waives a side-effect gate or a mandatory selection gate — the authoritative list is [`flags.md`](flags.md) "Flag → gate matrix" |
+| `--no-dashboard` | Skip the automatic dashboard build/serve at run completion — suppresses both the forced serve and, in compact layout, the dashboard offer; render later with `/docforge-dashboard` |
+| `--vendor <id>` | Repeatable: emit shim context files for the named AI coding-agent vendor(s) in addition to Claude. Accepted ids: `claude`, `codex`, `cursor`, `copilot`, `windsurf`, `aider`, `gemini`. Omitting the flag produces no additional shims (Claude-only output is unchanged) |
+| `--research <mode>` | Authorize external web research for this run. Modes: `official-primary` (recommended; standards + official docs + primary research), `official-only`, `off`. An explicit flag is prior user confirmation; without it, material external questions are shown and confirmed before any web access, and `--auto-accept` never grants web access implicitly. `--plan-only` records the policy but defers research to a writing run |
+| `--help` | Show this reference and stop |
+
+Example: `/docforge --plan-only`.
+
+Natural-language update / refresh of a named document uses the same command
+(staleness-first revision, not a full rewrite).
+
+## `/docforge-revise`
+
+Purpose: structural refresh of the repository documentation — revise all, a
+docs area, or the flow index, with the same catalog, manifest, provenance,
+and audit discipline as `/docforge`. A bare invocation migrates manifest
+metadata only (no scope question, no writing).
+
+| Parameter | Meaning |
+|---|---|
+| *(none)* | Metadata-only: migrate/upgrade the manifest metadata via `migrate_metadata.{py,js}` (dry-run preview first, then apply — unconditional and idempotent, a clean no-op when already current); no scope question, no detection, no writing, no dashboard |
+| `flow` | Full flow pipeline — flow mode question (re-analyze vs reuse) → harvest → organize → analyze → **mandatory flow selection gate** (add/remove/update, never auto-accepted) → write → summary write-back |
+| `<area>` | Scoped revise of one catalog group — `root`, `product`, `architecture`, `engineering`, `operations`, `reference`, `security`, `contributing`, `records`, `portfolio`, `agent-context`, plus aliases (`arch`, `ops`, `ref`, `sec`, `adr`, `agents`, …), listed by `query_catalog --groups`. An unknown area is an error, never a full-tree fallback. `flow`/`flows` is reserved for the flow pipeline and is not an area. |
+| `all` | Full-tree revise, including the flow mode question and the flow selection gate — unless the invocation also states a task clause (e.g. `all "add more diagrams"`), which narrows the run to a targeted revise and closes every gate the task does not name |
+| *(a stated task clause)* | Targeted revise: a task clause names an operation on document content ("add more diagrams", "fix the broken links") rather than a change to documented scope, and closes every gate it does not name — profiles, tier, layout, audiences, and the flow index stay baseline facts unless the task's own evidence makes one of them material. See [`workflows/revision.md`](workflows/revision.md) "Revise objective" |
+| `--plan-only` | Revise analysis only (migrate, staleness, detect/catalog, the suitable-missing-audiences prompt, the flow gate when the scope re-harvests flows, dry-run tree / structure update) — narrower under a task clause, since detect/catalog and the audience prompt only run when the task's gates are actually open; no body writes, but the flow index and its main-standalone stubs are metadata and are written |
+| `--auto-accept` | Same as `/docforge` — display, then continue without routine pauses; side-effect gates and the mandatory selection gates stay (authoritative list: [`flags.md`](flags.md) "Flag → gate matrix") |
+| `--research <mode>` | Authorize external web research for this run. Same modes as `/docforge`. Without it, revise preserves unchanged external references and marks claims needing revalidation as `needs_review` |
+| `--no-dashboard` | Skip the automatic dashboard build/serve at run completion — suppresses both the forced serve and, in compact layout, the dashboard offer |
+| `--help` | Show this reference and stop |
+
+Example: `/docforge-revise flow --plan-only`.
+
+## `/docforge-dashboard`
+
+Purpose: render the written Docforge documentation as a local Fumadocs site
+under `<repo>/.docforge/dashboard/` — a generated, git-ignored, disposable
+directory that never touches the repository's package files. A **view**, not
+a documentation source; the source of truth stays `docs/` Markdown and
+`.docforge/manifest.json`.
+
+| Parameter | Meaning |
+|---|---|
+| *(none)* | Scan diagnostics → `dashboard start`: reconcile metadata → rebuild generated output when the working-tree signature changed → serve → open |
+| `--force` | Ignore signatures: always regenerate generated output, keeping `node_modules` |
+| `--plan-only` | Preflight, metadata dry-run, signatures, and route plan; no conversion, no writes, no server |
+| `--auto-accept` | No interactive prompt of `/docforge-dashboard`'s own to skip — `start` always renders current documentation; never authorizes installing Node.js, changing package files, or deleting the dashboard directory |
+| `--no-open` | `start` only: skip opening the default browser after the server is healthy |
+| `--port N` | `start` only: bind the dev server to port `N` instead of an auto-picked free port |
+| `--help` | Show this reference and stop |
+
+Subcommands: `scan` (read-only diagnostics: missing metadata, incomplete or
+missing documents, stale provenance sources, broken links, route-plan
+problems, untracked `docs/` files — self-managed and archived docs are known
+and never flagged — each tagged blocking or advisory; exits 1
+when anything is found — "you should revise again"), `start` (build-if-changed
+→ serve → open, stopping before build on any blocking finding), `export`
+(build-if-changed → static HTML export: `next build` emits `index.html` per
+page under `<dashboard>/out/` for static hosting (GitHub Pages, S3, …) at a
+domain root; no server, no browser; takes no flags), `status` (read-only
+state), `stop` (shut down the detached dev server).
+
+A legacy manifest (any pre-3.0 version — 1.1 `project_context` /
+`document_groups`, 2.0 flat `documents` with overlays, or another shape) is
+auto-migrated to the current schema by `start`/`export` (never a stop-and-ask
+gate: `migrate_metadata` is safe, idempotent, re-registers any legacy version,
+and never touches document bodies — the migration is always printed).
+`--plan-only` runs the `migrate_metadata --dry-run` preview instead of
+migrating; `scan`/`status` stay strictly read-only and never migrate. See
+`workflows/dashboard.md`.

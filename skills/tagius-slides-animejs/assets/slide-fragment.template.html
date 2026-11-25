@@ -1,0 +1,87 @@
+<!--
+  Per-slide fragment skeleton. Authored at the 720×405 px virtual canvas
+  (matches slides-grab; rendered at viewport scale by overlay.js).
+
+  Each slide is loaded inside its own `<iframe srcdoc>`. CSS in this fragment
+  is fully isolated — you can use `html`, `body`, `:root`, and bare element
+  selectors freely without polluting the host document.
+
+  Conventions:
+    - `data-anim` on elements that animate on entrance.
+    - `data-anim-from="up|down|left|right|scale|fade"` (default: up).
+    - For richer choreography, declare `window.__slideTL[N] = (root) => ({ cancel })`
+      in an inline `<script type="module">`. `N` is the 0-based slide index.
+      The optional `cancel` handler is invoked when the slide is exited —
+      use it to stop intervals, timelines, and reset DOM state.
+    - For PowerPoint-style click-advance, declare `window.__slideSteps = K`
+      (1..K internal steps) and `window.__slideStep = (n, dir) => void`.
+      Parent calls __slideStep(0, 1) on enter; ArrowRight advances 1..K
+      within the slide before moving to the next slide; ArrowLeft reverses.
+
+  SAFE-ZONE: a 26 px footer band is reserved at the bottom of every slide.
+  Keep all content within `padding-bottom: 38px` (or pad inner columns).
+
+  IDLE ANIMATION: every slide should have at least one subtle idle motion
+  (breathing scale, drifting dots, gently pulsing accent) so static layouts
+  do not feel dead. Make 2–3 slides per deck "signature memorable" with a
+  distinctive idle that ties to the slide topic — these become the anchor
+  visuals the audience remembers.
+-->
+<style>
+  :root { --bg: #FFFFFF; --fg: #111111; --accent: #215CAF; --muted: #6F6F6F; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { width: 720px; height: 405px; overflow: hidden;
+    background: var(--bg); color: var(--fg);
+    font-family: 'Inter', 'Helvetica Neue', Arial, sans-serif; }
+  .slide { width: 720px; height: 405px; padding: 32px 52px 44px;
+    display: flex; flex-direction: column; gap: 14px; position: relative; }
+  h1 { font-size: 30px; font-weight: 800; color: var(--fg); }
+  .slide-footer { position: absolute; bottom: 0; left: 0; right: 0; height: 26px;
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 0 18px; z-index: 100;
+    background: rgba(255,255,255,0.88); border-top: 1px solid rgba(0,0,0,.07); }
+  .eth-logo { height: 13px; object-fit: contain; }
+  .slide-num { font-size: 10px; color: #6F6F6F; font-weight: 600; letter-spacing: .04em; }
+</style>
+<div class="slide">
+  <h1 data-anim data-anim-from="up">{{TITLE}}</h1>
+  <ul>
+    <li data-anim>First bullet</li>
+    <li data-anim>Second bullet</li>
+    <li data-anim>Third bullet</li>
+  </ul>
+</div>
+<div class="slide-footer">
+  <img src="./assets/eth_logo_kurz_pos.png" alt="ETH Zürich" class="eth-logo">
+  <span class="slide-num">{{NUM}} / {{TOTAL}}</span>
+</div>
+
+<!--
+  Example per-slide timeline (idle motion):
+
+  <script type="module">
+    import { animate } from "/assets/anime.esm.min.js";
+    window.__slideTL = window.__slideTL || {};
+    window.__slideTL[{{N}}] = (root) => {
+      const items = root.querySelectorAll('li');
+      const anim = animate(items, {
+        translateY: [{ to: -2 }, { to: 2 }],
+        duration: 2400, delay: (_, i) => i * 140,
+        loop: true, alternate: true, ease: 'inOutSine',
+      });
+      return { cancel: () => { try { anim.cancel?.(); } catch(e) {} } };
+    };
+  </script>
+
+  Example click-advance (PowerPoint-style steps):
+
+  <script type="module">
+    window.__slideSteps = 3; // 1..3
+    window.__slideStep = (n, dir) => {
+      document.querySelectorAll('.step').forEach((el, i) => {
+        el.classList.toggle('is-active', i === n - 1);
+        el.classList.toggle('is-done',   i <  n - 1);
+      });
+    };
+  </script>
+-->

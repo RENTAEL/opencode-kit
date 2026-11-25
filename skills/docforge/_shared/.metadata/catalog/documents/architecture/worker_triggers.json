@@ -1,0 +1,40 @@
+{
+  "id": "worker_triggers",
+  "type": "triggers-and-jobs",
+  "summary": "Trigger, payload, scheduling, concurrency, ownership, downstream effects",
+  "contract_file": "content/architecture/contracts/triggers-and-jobs.md",
+  "path": "docs/architecture/triggers-and-jobs.md",
+  "group": "architecture",
+  "selection": {
+    "mode": "static",
+    "min_tier": "spine",
+    "selectors": {
+      "shapes": [
+        "worker-serverless"
+      ]
+    },
+    "condition": null
+  },
+  "instruction_file": "content/architecture/instructions.md",
+  "requires": [
+    "code_graph",
+    "manifests"
+  ],
+  "target_depth": "deep-dive",
+  "answer_shape": "entry-catalog",
+  "write_order": 18,
+  "provenance_mode": "sections",
+  "audit_profile": "architecture",
+  "dominant_form": "flowchart",
+  "contract_revision": "3.0.0",
+  "template_file": "content/architecture/templates/triggers-and-jobs.md",
+  "compact_group": "architecture_compact",
+  "compact_order": 31,
+  "illustration_views": [
+    {
+      "form": "flowchart",
+      "section": "Triggers and jobs",
+      "question": "which trigger starts which job, and what downstream effect follows"
+    }
+  ]
+}

@@ -1,0 +1,35 @@
+{
+  "id": "claude_settings",
+  "type": "machine-config",
+  "summary": "Self-contained safe Claude Code permissions and optional verified validation hook configuration",
+  "contract_file": "content/agent-context/contracts/machine-config.md",
+  "path": ".claude/settings.json",
+  "group": "agent-context",
+  "selection": {
+    "mode": "static",
+    "min_tier": "spine",
+    "selectors": {
+      "audiences": [
+        "coding-agents"
+      ]
+      ,
+      "vendors": []
+    },
+    "condition": null
+  },
+  "instruction_file": "content/agent-context/agents-kernel.instruction.md",
+  "requires": [
+    "manifests"
+  ],
+  "target_depth": "reference",
+  "answer_shape": null,
+  "write_order": 203,
+  "provenance_mode": "manifest",
+  "audit_profile": "machine",
+  "dominant_form": null,
+  "contract_revision": "3.0.0",
+  "presentation": {
+    "related_docs": "none"
+  },
+  "template_file": "content/agent-context/templates/claude-settings.json"
+}

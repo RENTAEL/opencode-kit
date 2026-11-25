@@ -1,0 +1,34 @@
+{
+  "id": "extension_points",
+  "type": "extension-points",
+  "summary": "Host contract, activation, contribution points, permissions, compatibility, sandbox, failure",
+  "contract_file": "content/reference/contracts/extension-points.md",
+  "path": "docs/reference/extension-points.md",
+  "group": "reference",
+  "selection": {
+    "mode": "static",
+    "min_tier": "spine",
+    "selectors": {
+      "shapes": [
+        "plugin-extension"
+      ]
+    },
+    "condition": null
+  },
+  "instruction_file": "content/shared/host-integration.instruction.md",
+  "requires": [
+    "code_graph",
+    "manifests"
+  ],
+  "target_depth": "reference",
+  "answer_shape": "lookup",
+  "write_order": 65,
+  "nav_order": 66,
+  "provenance_mode": "sections",
+  "audit_profile": "standard",
+  "dominant_form": "table",
+  "contract_revision": "3.0.0",
+  "template_file": "content/reference/templates/extension-points.md",
+  "compact_group": "reference_compact",
+  "compact_order": 16
+}

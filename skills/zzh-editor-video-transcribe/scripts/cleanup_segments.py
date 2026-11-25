@@ -1,0 +1,397 @@
+#!/usr/bin/env python3
+"""
+Clean up SRT segments: remove empty-text entries and merge consecutive
+duplicate-text entries (artifacts from VAD boundary overlap or refine).
+
+Pipeline:
+  1. Drop segments with empty/whitespace-only text
+  2. Merge adjacent segments sharing identical text (extend the first's end time)
+  3. Re-number
+
+Usage:
+    python3 scripts/cleanup_segments.py <input.srt> [output.srt]
+"""
+
+import argparse
+import sys
+from collections import Counter
+from pathlib import Path
+
+
+# ── Hallucination detection ──────────────────────────────────────────
+
+MIN_HALLUCINATION_LEN = 30   # minimum length to check for loops
+MIN_UNIQUE_CHARS_RATIO = 0.04  # unique chars / total length below this = loop
+
+# Known whisper hallucination phrases. Matching is normalized (spaces/zero-width
+# stripped) so Groq's spacing-free output still hits the blacklist.
+KNOWN_HALLUCINATIONS = frozenset({
+    # Whisper re-reads a Chinese instruction prompt aloud as hallucinated speech
+    # during silent windows. The farewell often arrives split across two cues
+    # ("请不吝点赞 订阅 转发 打赏支持" + "明镜与点点栏目"), so blacklist the
+    # halves separately — whole-phrase matching missed the split variant.
+    "请不吝点赞订阅转发打赏支持",
+    "明镜与点点栏目",
+    "请准确转写专业",
+    "保持简体中文",
+})
+
+# Text-density hallucination rule: a segment whose text is far too long for
+# its tiny duration is almost always a whisper hallucination (real speech
+# sustains ~4-8 chars/s in Chinese). e.g. 18 chars in 0.54s (~33 chars/s).
+HALLUC_DURATION_S = 1.0       # only flag segments shorter than this
+HALLUC_MIN_CHARS = 15         # ... with at least this many visible chars
+HALLUC_MIN_CHARS_PER_SEC = 15.0  # ... at a density above this threshold
+# English sustains far higher char density than Chinese — ~15-25 chars/s at
+# natural fast speech (English words average ~5 chars). The 15 chars/s rule
+# wrongly flags rapid but real English (e.g. "find this blue dot." = 20 chars/s
+# in 0.79s). Latin-only segments get a higher bar; CJK keeps the tighter one.
+HALLUC_MIN_CHARS_PER_SEC_EN = 25.0  # Latin-only density bar (still catches >25/s)
+
+# Sparse-window hallucination rule (the mirror of density): a very long
+# segment carrying almost no text is Whisper inflating a single repeated
+# phrase (e.g. "谢谢大家") across a trailing silence window. Human speech
+# sustains ~4-8 chars/s, so a 30s window with 4 chars is a fabricated loop.
+SPARSE_DURATION_S = 20.0      # only flag segments longer than this
+SPARSE_MAX_CHARS_PER_SEC = 0.5  # ... with density below this (chars / second)
+
+# Groq verbose_json quality-metric hallucination rule. Whisper reports a high
+# no_speech_prob for silence-blocks it hallucinated text into; low avg_logprob
+# additionally flags low-confidence decoding. Together they identify invented
+# content better than any text heuristic (which can be fooled by spacing or
+# short-but-valid loops).
+NO_SPEECH_PROB_THRESHOLD = 0.8   # >= this → decoder believes there's no speech
+AVG_LOGPROB_THRESHOLD = -1.0     # <= this → low decoding confidence
+MIN_HALLUC_TEXT_CHARS = 4        # ignore near-empty segments (handled elsewhere)
+
+# VAD off-speech hallucination rule. A cue deep inside a silence gap is
+# Whisper fabricating text — the classic "you" loop every 30s and the
+# "请不吝点赞订阅转发打赏" farewell复读 on long pauses. Deep-inside means:
+# almost no speech overlap AND the cue midpoint sits well away from any
+# speech region. The distance band matters: W13 精校 found real speech that
+# Silero misses lands 0.8-1.0s outside a speech region (soft speech at VAD
+# threshold boundary), while real hallucinations sit 78-369s into silence —
+# hence 2.0s. Deleted cues land in the audit sidecar for review/restore.
+OFFSPEECH_MAX_OVERLAP_S = 0.3    # speech overlap below this → candidate
+OFFSPEECH_MIN_DISTANCE_S = 2.0   # midpoint this far from any speech → deep in silence
+
+
+def _normalize_text(text: str) -> str:
+    return text.replace(" ", "").replace("\u200b", "").lower()
+
+
+def _is_known_hallucination(text: str) -> bool:
+    """Blacklist match, normalized (space-insensitive, case-insensitive)."""
+    norm = _normalize_text(text)
+    if not norm:
+        return False
+    for phrase in KNOWN_HALLUCINATIONS:
+        if _normalize_text(phrase) in norm:
+            return True
+    return False
+
+
+def _is_repeat_loop(text: str) -> bool:
+    """Detect VAD hallucination loops (repeating chars, bigrams, or tiny vocabulary)."""
+    chars = text.replace(" ", "").replace("\u200b", "")
+    if len(chars) < MIN_HALLUCINATION_LEN:
+        return False
+
+    n_unique = len(set(chars))
+    # Very small vocabulary relative to length → repetition loop
+    if n_unique / len(chars) < MIN_UNIQUE_CHARS_RATIO:
+        return True
+    # Very few unique characters overall → almost certainly a loop
+    if n_unique <= 2 and len(chars) >= MIN_HALLUCINATION_LEN:
+        return True
+
+    return False
+
+
+def _is_latin_text(text: str) -> bool:
+    """True when the segment is essentially Latin-script speech (English), i.e.
+    no CJK characters. Mixed bilingual segments keep the Chinese threshold."""
+    for ch in text:
+        if '\u4e00' <= ch <= '\u9fff' or '\u3400' <= ch <= '\u4dbf':
+            return False
+    return bool(text.strip())
+
+
+def _is_dense_hallucination(seg: dict) -> bool:
+    """True when a very short segment carries an implausible amount of text,
+    i.e. text density far exceeds human speech rate. The density bar is
+    language-aware: English sustains ~15-25 chars/s naturally, so Latin-only
+    segments use a higher threshold than Chinese (4-8 chars/s)."""
+    text = seg.get("text", "").strip()
+    if not text:
+        return False
+    threshold = HALLUC_MIN_CHARS_PER_SEC_EN if _is_latin_text(text) else HALLUC_MIN_CHARS_PER_SEC
+    chars = len(_normalize_text(text))
+    if not chars or chars < HALLUC_MIN_CHARS:
+        return False
+    duration = (seg.get("end", 0) or 0) - (seg.get("start", 0) or 0)
+    if duration <= 0 or duration > HALLUC_DURATION_S:
+        return False
+    return chars / duration >= threshold
+
+
+def _is_sparse_hallucination(seg: dict) -> bool:
+    """True when a very long segment carries implausibly little text.
+
+    Whisper inflates a single repeated phrase (e.g. "谢谢大家") across a
+    trailing silence window, producing e.g. 4 chars over 30s. Real speech
+    sustains ~4-8 chars/s, so density far below that over a long window is
+    a fabricated loop, not a slow speaker.
+    """
+    text = seg.get("text", "").strip()
+    chars = len(_normalize_text(text))
+    if not chars:
+        return False
+    duration = (seg.get("end", 0) or 0) - (seg.get("start", 0) or 0)
+    if duration < SPARSE_DURATION_S:
+        return False
+    return chars / duration < SPARSE_MAX_CHARS_PER_SEC
+
+
+def _has_quality_metrics(seg: dict) -> bool:
+    """True when Groq's verbose_json returned quality metrics for this seg."""
+    return "no_speech_prob" in seg and "avg_logprob" in seg
+
+
+def _is_no_speech_hallucination(seg: dict) -> bool:
+    """Detect hallucinated content via Groq's decoder confidence metrics.
+
+    Whisper fabricates text into silence blocks and marks them with a high
+    no_speech_prob plus a very negative avg_logprob. When both signals agree
+    we drop the segment regardless of what its text looks like — this catches
+    spacing/blacklist-free hallucinations the text heuristics miss.
+    """
+    if not _has_quality_metrics(seg):
+        return False
+    nsp = seg.get("no_speech_prob", 0) or 0
+    if nsp < NO_SPEECH_PROB_THRESHOLD:
+        return False
+    logprob = seg.get("avg_logprob", 0) or 0
+    if logprob > AVG_LOGPROB_THRESHOLD:
+        return False
+    text = seg.get("text", "").strip()
+    if len(_normalize_text(text)) < MIN_HALLUC_TEXT_CHARS:
+        return False
+    return True
+
+
+def _is_offspeech_hallucination(seg: dict, regions) -> bool:
+    """True when a cue sits deep inside a silence gap.
+
+    ``regions`` is a vad_map.SpeechRegions instance (or None → rule disabled).
+    Deep inside = speech overlap under threshold AND the cue midpoint at least
+    OFFSPEECH_MIN_DISTANCE_S away from any speech region. Short cues qualify
+    too (the 30s-periodic "you" loop is ~1s long); real short words always
+    hug a speech region. Language-independent, so both paths use it.
+    """
+    if regions is None:
+        return False
+    text = seg.get("text", "").strip()
+    # 3 chars lets the "you" loop through; 1-2 char fillers stay (audit
+    # trade-off: deleting a real lone "嗯" to catch nothing extra is a loss)
+    if len(_normalize_text(text)) < 3:
+        return False
+    start = seg.get("start", 0) or 0
+    end = seg.get("end", 0) or 0
+    if end <= start:
+        return False
+    if regions.overlap(start, end) >= OFFSPEECH_MAX_OVERLAP_S:
+        return False
+    return regions.distance_to_speech((start + end) / 2.0) >= OFFSPEECH_MIN_DISTANCE_S
+
+
+def _is_punct_only(text: str) -> bool:
+    """True when a cue carries no letters/digits/CJK at all (Whisper
+    degenerates to '.'-only segments after long silences in long calls)."""
+    t = text.strip()
+    return bool(t) and not any(
+        ch.isalnum() or '\u4e00' <= ch <= '\u9fff' for ch in t)
+
+
+def _record_audit(audit: list[dict] | None, seg: dict,
+                  reasons: list[str], action: str) -> None:
+    if audit is not None:
+        audit.append({
+            "start": seg.get("start"),
+            "end": seg.get("end"),
+            "text": seg.get("text", ""),
+            "reasons": reasons,
+            "action": action,
+        })
+
+
+def cleanup(segments: list[dict], audit: list[dict] | None = None,
+            english: bool = False, regions=None) -> list[dict]:
+    """Drop ASR noise and merge duplicated cues.
+
+    ``english`` disables the density-based hallucination rules (dense_text,
+    sparse_text, no_speech_metrics): their thresholds are calibrated for
+    Chinese, where speech runs ~4-8 chars/s. English speech reaches 20-30
+    chars/s, so a fast but real line gets flagged, and Groq reports high
+    no_speech_prob for the long silences around a short phrase — which drops
+    genuine words. The blacklist and repeat-loop rules stay on for both.
+
+    ``regions`` (vad_map.SpeechRegions) enables the off-speech hallucination
+    rule for both languages — it is audio truth, not a text heuristic.
+    """
+    if not segments:
+        return []
+
+    # Step 1: remove empty / punctuation-only text and record each cleanup
+    # decision when requested.
+    non_empty = []
+    for seg in segments:
+        if not seg.get("text", "").strip():
+            _record_audit(audit, seg, ["empty_text"], "removed")
+        elif _is_punct_only(seg.get("text", "")):
+            _record_audit(audit, seg, ["punct_only"], "removed")
+        else:
+            non_empty.append(seg)
+    if not non_empty:
+        return []
+
+    # Step 1.5: remove hallucinated segments and retain an audit trail.
+    kept = []
+    for seg in non_empty:
+        text = seg.get("text", "")
+        reasons = []
+        if _is_repeat_loop(text):
+            reasons.append("repeat_loop")
+        if _is_known_hallucination(text):
+            reasons.append("known_hallucination")
+        if _is_dense_hallucination(seg) and not english:
+            reasons.append("dense_text")
+        if _is_sparse_hallucination(seg) and not english:
+            reasons.append("sparse_text")
+        if _is_no_speech_hallucination(seg) and not english:
+            reasons.append("no_speech_metrics")
+        if _is_offspeech_hallucination(seg, regions):
+            reasons.append("offspeech_vad")
+        if reasons:
+            _record_audit(audit, seg, reasons, "removed")
+        else:
+            kept.append(seg)
+    non_empty = kept
+    if not non_empty:
+        return []
+
+    # Step 2: merge consecutive segments with identical text (case-insensitive)
+    # Only when gap <= 1.0s — covers VAD boundary overlap without swallowing
+    # distant repetitions or stretching across silent windows.
+    MAX_DUP_MERGE_GAP_S = 1.0
+    merged: list[dict] = [non_empty[0]]
+    for s in non_empty[1:]:
+        last = merged[-1]
+        if s["text"].strip().lower() == last["text"].strip().lower():
+            gap = s.get("start", 0) - last.get("end", 0)
+            if gap <= MAX_DUP_MERGE_GAP_S:
+                last["end"] = s["end"]
+                _record_audit(audit, s, ["duplicate_text"], "merged")
+            else:
+                merged.append(s)
+        else:
+            merged.append(s)
+
+    # Step 3: re-number via caller responsibility (already handled by SRT writer)
+    return merged
+
+
+def parse_srt(path: str) -> list[dict]:
+    import re
+    segments: list[dict] = []
+    with open(path, "r", encoding="utf-8") as f:
+        lines = f.readlines()
+
+    i = 0
+    while i < len(lines):
+        line = lines[i].strip()
+        if not line:
+            i += 1
+            continue
+        if line.isdigit():
+            i += 1
+            if i >= len(lines):
+                break
+            ts = lines[i].strip()
+            i += 1
+            text_lines = []
+            while i < len(lines) and lines[i].strip():
+                text_lines.append(lines[i].strip())
+                i += 1
+            text = " ".join(text_lines)
+            m = re.match(
+                r"(\d{2}):(\d{2}):(\d{2})[,.](\d{3})\s*-->\s*"
+                r"(\d{2}):(\d{2}):(\d{2})[,.](\d{3})",
+                ts,
+            )
+            if m:
+                start = (int(m[1]) * 3600 + int(m[2]) * 60 + int(m[3])
+                         + int(m[4]) / 1000)
+                end = (int(m[5]) * 3600 + int(m[6]) * 60 + int(m[7])
+                       + int(m[8]) / 1000)
+                segments.append({
+                    "start": start,
+                    "end": end,
+                    "text": text,
+                })
+            i += 1
+        else:
+            i += 1
+    return segments
+
+
+def write_srt(segments: list[dict], path: str):
+    with open(path, "w", encoding="utf-8") as f:
+        for i, seg in enumerate(segments, 1):
+            start_ms = max(0, round(seg["start"] * 1000))
+            end_ms = max(0, round(seg["end"] * 1000))
+            sh, start_ms = divmod(start_ms, 3_600_000)
+            sm, start_ms = divmod(start_ms, 60_000)
+            ss, sms = divmod(start_ms, 1000)
+            eh, end_ms = divmod(end_ms, 3_600_000)
+            em, end_ms = divmod(end_ms, 60_000)
+            es, ems = divmod(end_ms, 1000)
+            f.write(f"{i}\n")
+            f.write(f"{sh:02d}:{sm:02d}:{ss:02d},{sms:03d} --> "
+                    f"{eh:02d}:{em:02d}:{es:02d},{ems:03d}\n")
+            f.write(f"{seg['text']}\n\n")
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Clean up SRT: remove empty segments & merge adjacent duplicates"
+    )
+    parser.add_argument("input", help="input SRT file path")
+    parser.add_argument("output", nargs="?",
+                        help="output SRT file path (default: overwrite input)")
+    args = parser.parse_args()
+
+    input_path = Path(args.input)
+    if not input_path.exists():
+        print(f"error: {input_path} not found", file=sys.stderr)
+        sys.exit(1)
+
+    segs = parse_srt(str(input_path))
+    before = len(segs)
+    out = cleanup(segs)
+    after = len(out)
+
+    output_path = args.output or str(input_path)
+    write_srt(out, output_path)
+
+    removed = before - after
+    if removed:
+        print(f"cleanup: {before} → {after} segments (removed {removed} empty/duplicate) → {output_path}",
+              file=sys.stderr)
+    else:
+        print(f"cleanup: {before} segments, no changes → {output_path}",
+              file=sys.stderr)
+
+
+if __name__ == "__main__":
+    main()

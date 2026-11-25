@@ -1,0 +1,40 @@
+{
+  "id": "api_errors",
+  "type": "error-catalog",
+  "summary": "Stable code/name, trigger, client behavior, retryability, observability",
+  "contract_file": "content/reference/contracts/error-catalog.md",
+  "path": "docs/reference/errors.md",
+  "group": "reference",
+  "selection": {
+    "mode": "static",
+    "min_tier": "spine",
+    "selectors": {
+      "shapes": [
+        "api-service"
+      ]
+    },
+    "condition": null
+  },
+  "instruction_file": "content/reference/instructions.md",
+  "requires": [
+    "code_graph"
+  ],
+  "target_depth": "reference",
+  "answer_shape": "entry-catalog",
+  "write_order": 65,
+  "nav_order": 64,
+  "provenance_mode": "sections",
+  "audit_profile": "standard",
+  "dominant_form": "flowchart",
+  "contract_revision": "3.0.0",
+  "template_file": "content/reference/templates/error-catalog.md",
+  "compact_group": "reference_compact",
+  "compact_order": 12,
+  "illustration_views": [
+    {
+      "form": "flowchart",
+      "section": "Classification",
+      "question": "how does a caller decide which class an error falls into, and whether to retry"
+    }
+  ]
+}

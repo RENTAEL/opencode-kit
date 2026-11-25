@@ -1,0 +1,19 @@
+---
+name: templates
+description: "{{PROJECT_CONTEXT}}"
+---
+# {{Skill Display Name}}
+
+{{PROJECT_CONTEXT}}
+
+## {{SECTION_1_HEADING}}
+
+{{SECTION_1_CONTENT}}
+
+## {{SECTION_2_HEADING}}
+
+{{SECTION_2_CONTENT}}
+
+## {{SECTION_3_HEADING}}
+
+{{SECTION_3_CONTENT}}

@@ -1,0 +1,72 @@
+# CLAUDE.md — Project Configuration for AI Agents
+
+This file configures how AI agents (Claude Code, Codex, Cursor, etc.)
+behave when working with this project.
+
+---
+
+## Git Commit Rules
+
+- Always use `smart-git-commit` 5-part format: CONTEXT / CHANGE / WHY / IMPACT / footers
+- Type/scope conventions for THIS project:
+
+  | Area | Scope | Commit Type |
+  |------|-------|-------------|
+  | [FILL IN] | [FILL IN] | [FILL IN] |
+  | [FILL IN] | [FILL IN] | [FILL IN] |
+
+- Test command: `[FILL IN: npm test / pytest / cargo test / go test ./...]`
+- Ticket prefix: `[FILL IN: GH / JIRA / LINEAR]`
+
+---
+
+## Branch Rules
+
+- `feature/<ticket>-<short-description>` — new features
+- `fix/<ticket>-<short-description>` — bug fixes
+- `hotfix/<description>` — urgent production fixes
+- `release/vX.Y.Z` — release preparation
+- Never commit directly to: `main`, `master`, `develop`
+
+---
+
+## PR Rules
+
+- Always create as draft first
+- Must link to an issue or ticket
+- Must pass all tests
+- Must have no secrets in diff (run `bash scripts/scan-secrets.sh`)
+- Title must match the most significant commit subject
+
+---
+
+## Release Rules
+
+- Follow semver strictly: MAJOR.MINOR.PATCH
+- Run `bash scripts/generate-changelog.sh` before tagging
+- Always tag releases, never just push a version bump commit
+- Pre-release tags: `vX.Y.Z-alpha.N`, `vX.Y.Z-beta.N`, `vX.Y.Z-rc.N`
+
+---
+
+## Quick Reference
+
+```bash
+# Security scan
+bash scripts/scan-secrets.sh
+
+# Run tests
+bash scripts/detect-test-runner.sh
+
+# Split mixed changesets
+bash scripts/split-commits.sh
+
+# Generate changelog
+bash scripts/generate-changelog.sh
+
+# Create PR
+bash scripts/create-pr.sh
+
+# Set git commit template
+git config commit.template skills/smart-git-commit/templates/.gitmessage
+```

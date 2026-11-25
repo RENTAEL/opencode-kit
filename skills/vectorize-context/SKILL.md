@@ -1,0 +1,220 @@
+---
+name: vectorize-context
+description: "Indexes scoped project markdown (`.opencode/context/`, `.opencode/rules/`, `.opencode/docs/`, root `AGENTS.md`) **and the project source tree** into two local sqlite-vec vector databases for semantic retrieval. **Local-only** ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â embeddings and reranking both ru..."
+---
+# Vectorize Context
+
+Indexes scoped project markdown (`.opencode/context/`, `.opencode/rules/`, `.opencode/docs/`, root `AGENTS.md`) **and the project source tree** into two local sqlite-vec vector databases for semantic retrieval. **Local-only** ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â embeddings and reranking both run in-process on ONNX Runtime (`@huggingface/transformers`) ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â no daemon, no Ollama. **Zero provider API requests** during retrieval or injection.
+
+## Two Stores
+
+| Store | DB | Sources | Chunking |
+|-------|----|---------|----------|
+| **context** | `.opencode/state/vector/context.db` | `.opencode/context/**`, `.opencode/rules/**`, `.opencode/docs/**`, `AGENTS.md` | `##`/`###` heading boundaries |
+| **code** | `.opencode/state/vector/code.db` | Project source tree (`.ts .js .py .go .rs ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦`), skipping `node_modules`, `.git`, `dist/build/vendor` dirs, and `.opencode/state` + `.opencode/cache` (privacy) | Declaration boundaries (function/class/const/def at col 0), 60-line / 6KB caps |
+
+The code store uses a looser ANN distance floor (0.92 vs 0.8) ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â code embeddings sit at higher distances than markdown.
+
+## How It Works
+
+The system uses **lazy freshness**: every query automatically stats all scoped files, re-indexes only what changed, then searches. This covers every write path:
+
+| Trigger | Behavior |
+|---------|----------|
+| Hub writes a new context/decision/pattern file | Next query picks it up automatically |
+| `/harvest-context` saves research docs | Indexed on next query |
+| `/orchestrate` completes and saves patterns | Indexed on next query |
+| `/ideation` finalizes a plan to context | Indexed on next query |
+| Direct `.md` file edit in scoped dirs | Indexed on next query |
+| Source file edited/created in project tree | Hook sync re-indexes it (10s poll) |
+| Plugin watcher detects file change | `vectorize-hook.ts` spawns `sync-hook.ts` (10s poll) |
+| Full re-index needed | Delete `.opencode/state/vector/*.db` ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â auto-rebuilds on next query |
+
+The embedding model is **only called when there's actual work to do** (files changed). If everything is up to date, `ensureIndexed()` returns instantly with no embedding calls.
+
+## Scoped Sources
+
+| Path | Included |
+|------|----------|
+| `.opencode/context/**` (frameworks, patterns, research, decisions) | Yes |
+| `.opencode/rules/**` | Yes |
+| `.opencode/docs/**` | Yes |
+| Root `AGENTS.md` | Yes |
+| Everything else | No |
+
+## Scripts
+
+| Script | Purpose |
+|--------|---------|
+| `scripts/veclib.ts` | Shared library ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â exported programmatic API for all integrations |
+| `scripts/vectorize.ts` | CLI: manual re-index (`--all` default, `--context`, `--code`) |
+| `scripts/query.ts` | CLI: semantic search (`--code` for the code store) |
+| `scripts/sync-hook.ts` | **Child-process** maintenance sync ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â spawned by `vectorize-hook.ts`; only syncs stores that already exist (builds are manual via `vectorize.ts`) |
+| `scripts/query-hook.ts` | **Child-process** store query ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â spawned by the transform hook in `hooks.ts`; outputs `{context, code}` JSON |
+
+## Programmatic API (veclib.ts)
+
+Used by Hubs hub subcommands, agents, and the hooks plugin (via child processes):
+
+```js
+// Lazy re-index: stats files, only loads model if something changed
+import { ensureIndexed, ensureCodeIndexed } from './veclib.ts';
+await ensureIndexed();                // context store, current project
+await ensureCodeIndexed();            // code store, current project
+await ensureIndexed('/path/to/app');  // specific project (or .opencode dir)
+
+// Semantic search (auto-refreshes index first)
+import { queryChunks, queryCodeChunks } from './veclib.ts';
+const results = await queryChunks(undefined, 'auth patterns', 10);
+const codeResults = await queryCodeChunks(undefined, 'chunking logic', 5);
+// results: [{ source, heading, content, file_path, distance, rerank_score? }]
+
+// Single-file upsert (hook path)
+import { vectorizeFile, vectorizeCodeFile } from './veclib.ts';
+await vectorizeFile('/abs/path/file.md', projectRoot);
+await vectorizeCodeFile('/abs/path/src/main.ts', projectRoot);
+
+// Index stats
+import { getIndexStats, getCodeIndexStats } from './veclib.ts';
+const stats = await getIndexStats();
+// { exists, totalChunks, totalFiles, embedding: { model, dim }, files: [...] }
+```
+
+`queryChunks(projectRoot, query, topN, { useReranker: true })` ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â two-stage retrieval: ANN distance floor (0.8 context / 0.92 code) on ~20 candidates, then in-process cross-encoder rerank to top-N. If the reranker fails (model missing, timeout), it falls back to distance ordering ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â same behavior as rerank-less retrieval.
+
+## CLI Usage
+
+```bash
+# Manual re-index ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â context + code (default), or per store
+node {skill_dir}/scripts/vectorize.ts            # both stores
+node {skill_dir}/scripts/vectorize.ts --code     # code store only
+node {skill_dir}/scripts/vectorize.ts --context  # context store only
+
+# Semantic search (auto-refreshes on every call)
+node {skill_dir}/scripts/query.ts "how does error handling work"
+node {skill_dir}/scripts/query.ts --code "chunking logic"
+QUERY="auth patterns" node {skill_dir}/scripts/query.ts
+```
+
+## Output Format
+
+### Query results
+```
+=== Search Results ===
+
+1. patterns/error-handling.md ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â Error Patterns (score: 0.71)
+   Error handling follows a centralized approach with...
+   [file: .opencode/context/patterns/error-handling.md]
+
+2. frameworks/architecture.md ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â System Design (score: 0.64)
+   The project follows a layered architecture...
+   [file: .opencode/context/frameworks/architecture.md]
+```
+
+## Dependencies
+
+```bash
+npm install better-sqlite3 sqlite-vec @huggingface/transformers
+```
+
+Requires Node.js 18+. Embeddings run in-process ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â no daemon:
+
+| Model | Purpose | Dimension |
+|-------|---------|-----------|
+| `Xenova/bge-small-en-v1.5` | Embeddings (in-process ONNX, q8) | 384 |
+
+**Both stages run in-process on ONNX Runtime** ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â no daemon, no `/api/embed`, no `/api/rerank`. Fetch the weights once with `npx tsx skills/vectorize-context/scripts/prefetch-models.ts`.
+
+| Model | Purpose | Notes |
+|-------|---------|-------|
+| `Xenova/bge-reranker-base` (override via `RERANK_MODEL` env) | Cross-encoder rerank | q8 quantized ONNX, ~280MB, cached under `node_modules/@huggingface/transformers/.cache/` |
+
+Reranking is a single-logit sigmoid cross-encoder (loaded via `AutoModel` + sigmoid ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â transformers.js has no built-in `rerank` pipeline). First query after install downloads the model (~280MB, one-time). If the model or download fails, retrieval silently falls back to distance ordering.
+
+## Tests
+
+Hermetic suite ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â zero network, zero native-model deps (a deterministic hash embedder + mock `/api/embed` server stand in for Ollama):
+
+```bash
+cd scripts && npm test          # 45 tests: veclib units + CLI + hook-script integration
+```
+
+| File | Coverage |
+|------|----------|
+| `tests/veclib.test.ts` | Path resolution, collectors (skip rules), chunkers (frontmatter, boundaries, line/char caps), indexing (fresh/incremental/deletion/idempotent), single-file vectorization, queries (ranking, floors, topK, lazy ensure, store separation), rerank degradation, stats, schema rebuild on model change, missing/corrupt DB grace |
+| `tests/cli.test.ts` | `vectorize.ts` flags, `query.ts` (usage/context/code), `sync-hook.ts` maintenance mode (skip-missing contract), `query-hook.ts` payload shape + never-crash contract, **plugin source regression guards** (no `veclib.ts` import in the plugin ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â the kernel-panic architecture; spawn/SIGKILL/childRunning/setInterval present) |
+| `tests/e2e.test.ts` | **Opt-in** (`RUN_E2E=1 npm run test:e2e`): full pipeline against real Ollama + real reranker. Skips gracefully when Ollama is unreachable. Validates the mock never drifts from the real API contract |
+
+Test env overrides (also useful in production): `OLLAMA_URL` (mock server), `EMBED_MODEL`, `RERANK_MODEL`, `RERANK_DISABLED=1` (force distance-only path, CI-friendly).
+
+## Integration Points
+
+### Automatic Injection (hooks plugin) ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â child-process isolated
+
+The plugin (`plugins/hooks/hooks.ts` + `vectorize-hook.ts`) provides automatic context + code injection. **Crash hardening: the plugin process never loads veclib or native modules** (better-sqlite3, sqlite-vec, ONNX). All indexing and querying happens in short-lived child processes:
+
+1. `chat.message` captures the user's latest prompt (per session, 2000-char slice)
+2. `experimental.chat.system.transform` runs on the next turn:
+   - Skips for simple prompts (complexity keyword gate)
+   - Spawns `query-hook.ts` (node child, 25s hard kill) ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ queries **both** stores with the **real user prompt** (not the model ID)
+   - Builds `<Relevant_Context>` (budget 1000 tokens) + `<Relevant_Code>` (budget 800 tokens) blocks
+   - 5-min session cache per store on prompt hash ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â repeat queries hit cache, no child spawn
+   - Clears the stored prompt after use (no stale injection)
+   - Any failure ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ silent skip (try/catch), zero impact on the turn
+3. `vectorize-hook.ts` keeps stores fresh: every 10s spawns `sync-hook.ts` (maintenance mode ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â **skips stores that don't exist yet**; the full build is `/memory-hub vectorize`), one child at a time, SIGKILL after 90s. A fresh install can never trigger a first-run index storm.
+
+### Manual Trigger (`/memory-hub search`)
+
+After any hub subcommand writes to scoped dirs:
+1. Write the file (existing behavior)
+2. Run `/memory-hub search` to index and query ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â no automatic indexing required (but the hook watcher does it anyway)
+
+### Agent Integration
+
+Agents can use `queryChunks()` to retrieve relevant context during execution:
+
+```js
+const ctx = await queryChunks(process.cwd() + '/.opencode', query, 5);
+// Inject results into agent context as supporting evidence
+```
+
+### Forced Re-index
+
+```bash
+rm -f .opencode/state/vector/context.db    # Delete the DB
+# Next query or ensureIndexed() call auto-rebuilds it
+```
+
+## Storage & Git
+
+- Stores: `.opencode/state/vector/context.db` + `code.db` (sqlite-vec)
+- Gitignored via `.opencode/state/` ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â never committed; fresh clones build their own stores lazily
+- Schema versioned in a `meta` table (`embedding_model`, `embedding_dim`) ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â if the embedding model or dimension changes, the store is dropped and rebuilt automatically
+
+## How It Works Internally
+
+1. `ensureIndexed()` scans scoped sources (context/rules/docs/AGENTS.md) for `*.md` files; `ensureCodeIndexed()` walks the project tree (skip dirs: node_modules, .git, dist/build/vendor, .opencode/state, .opencode/cache)
+2. Compares current file mtimes against stored mtimes in the DB
+3. If no files changed ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ returns immediately, no model loaded
+4. If files changed ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ embeds in **batches of 32 texts** through one in-process session (384-dim `bge-small-en-v1.5`, CLS pooling), chunks changed files (`##`/`###` headers for markdown; declaration boundaries for code)
+5. Deletes old chunks for changed files, inserts new ones
+6. Query: ANN L2-distance search (floor 0.8 context / 0.92 code, ~20 candidates) ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ in-process cross-encoder rerank (bge-reranker-base, sigmoid on single logit) ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ top-N
+7. Query always runs against the freshly-updated index
+
+The vec0 virtual table uses L2 distance. Since embeddings are normalized (unit vectors), L2 distance sorts equivalently to cosine similarity ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â nearest neighbors are the most semantically similar chunks.
+
+## Task Classifiers (ONNX)
+
+`zero-shot.ts` is the NLI primitive ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â it answers "does this text entail that claim?". `classifiers.ts` adds the *task-specific* heads, for questions entailment cannot answer:
+
+| Function | Task head | Model | Used by |
+|----------|-----------|-------|---------|
+| `entailmentScores` / `classify` / `bestHypothesis` | zero-shot NLI | `Xenova/mobilebert-uncased-mnli` | prompt-queue gate, graph type inference, graph `propose` |
+| `classifySequence` / `isInjection` | text-classification | `protectai/deberta-v3-base-prompt-injection-v2` | `privacy-scan/scripts/scan-injection.ts` |
+| `extractEntities` / `sensitiveSpans` | token-classification | `rtrigoso/bert-small-pii-detection-ONNX` | `privacy-scan` classifier escalation |
+
+Task heads load through `loadPipeline()` (onnx-runtime) with the same contract as `loadModel`: `q8`, bundled cache, **query-time no-download**, and `null` when the model is absent. They are **optional** ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â declared in `OPTIONAL_MODELS`, fetched by `prefetch-models.ts`, and never required (a missing head disables its feature; it does not fail the install).
+
+**Task fit matters.** Property detection (does this text contain a secret? is this an injection?) is a token/sequence-classification job, not an NLI one ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â measured: asked via NLI, a natural-language secret scored *below* an ordinary ADR. Speech acts (is this an ask? does this announce a replacement?) are where NLI works, with engineered hypotheses and a measured threshold.
+
+**Switching the NLI head** (`CLASSIFIER_ONNX_MODEL` / `ZERO_SHOT_ONNX_MODEL`, or `OPTIONAL_MODELS.nliLarge`) invalidates the gate's measured threshold (0.817) ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â re-measure before changing the default.

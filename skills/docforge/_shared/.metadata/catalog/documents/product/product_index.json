@@ -1,0 +1,28 @@
+{
+  "id": "product_index",
+  "type": "folder-index",
+  "summary": "Product documentation overview: what the product is, scope, and the reader question each product document answers",
+  "contract_file": "content/shared/folder-index.contract.md",
+  "path": "docs/product/README.md",
+  "group": "product",
+  "selection": {
+    "mode": "static",
+    "min_tier": "spine",
+    "selectors": {},
+    "condition": null
+  },
+  "instruction_file": "content/shared/folder-index.instruction.md",
+  "requires": [],
+  "target_depth": "orientation",
+  "answer_shape": "router",
+  "write_order": 19,
+  "nav_order": 10,
+  "provenance_mode": "sections",
+  "audit_profile": "router",
+  "dominant_form": null,
+  "template_file": "content/shared/section-readme.template.md",
+  "title": "Product",
+  "contract_revision": "3.0.0",
+  "compact_group": "product_compact",
+  "compact_order": 1
+}

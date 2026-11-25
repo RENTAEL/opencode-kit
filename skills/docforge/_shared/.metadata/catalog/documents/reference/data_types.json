@@ -1,0 +1,33 @@
+{
+  "id": "data_types",
+  "type": "data-types",
+  "summary": "Producers, transformations, contracts, checks, failure/recovery, schema ownership",
+  "contract_file": "content/reference/contracts/data-types.md",
+  "path": "docs/reference/data-types.md",
+  "group": "reference",
+  "selection": {
+    "mode": "static",
+    "min_tier": "spine",
+    "selectors": {
+      "shapes": [
+        "data-pipeline"
+      ]
+    },
+    "condition": null
+  },
+  "instruction_file": "content/reference/instructions.md",
+  "requires": [
+    "code_graph"
+  ],
+  "target_depth": "reference",
+  "answer_shape": "lookup",
+  "write_order": 68,
+  "nav_order": 63,
+  "provenance_mode": "sections",
+  "audit_profile": "standard",
+  "dominant_form": "table",
+  "contract_revision": "3.0.0",
+  "template_file": "content/reference/templates/data-types.md",
+  "compact_group": "reference_compact",
+  "compact_order": 18
+}

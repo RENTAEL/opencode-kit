@@ -1,0 +1,33 @@
+{
+  "id": "ba_index",
+  "type": "ba-index",
+  "summary": "Business Analyst documentation overview: what this view covers and the reader question each BA document answers",
+  "contract_file": "content/product/contracts/ba-index.md",
+  "path": "docs/product/business-analyst/README.md",
+  "group": "product",
+  "selection": {
+    "mode": "static",
+    "min_tier": "spine",
+    "selectors": {
+      "audiences": [
+        "business-analysts"
+      ]
+    },
+    "condition": null
+  },
+  "instruction_file": "content/shared/folder-index.instruction.md",
+  "requires": [
+    "code_graph"
+  ],
+  "target_depth": "orientation",
+  "answer_shape": "router",
+  "write_order": 43,
+  "provenance_mode": "sections",
+  "audit_profile": "router",
+  "dominant_form": null,
+  "template_file": "content/product/templates/ba-readme.md",
+  "title": "Business Analyst documentation",
+  "contract_revision": "3.0.0",
+  "compact_group": "ba_compact",
+  "compact_order": 11
+}

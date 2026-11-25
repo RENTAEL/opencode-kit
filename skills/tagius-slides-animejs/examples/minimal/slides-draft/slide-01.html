@@ -1,0 +1,63 @@
+<!-- Slide 1 — Title archetype: entrance choreography + one signature idle.
+     Palette lives in :root below; swap these tokens to recolour. -->
+<style>
+  :root {
+    --bg: #0b0c1a; --surface: #181a2d; --fg: #f5f5f7; --muted: #a8acb8;
+    --accent: #7c5cff; --accent-2: #ffd166;
+    --font-display: 'Inter', system-ui, sans-serif;
+    --font-body: 'Inter', system-ui, sans-serif;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { width: 720px; height: 405px; overflow: hidden;
+    background: radial-gradient(circle at 70% 25%, rgba(124,92,255,0.16), transparent 60%), var(--bg);
+    color: var(--fg); font-family: var(--font-body); }
+  .slide { width: 720px; height: 405px; padding: 40px 60px 48px;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 18px; text-align: center; position: relative; }
+  .mark { position: relative; width: 132px; height: 132px;
+    display: flex; align-items: center; justify-content: center; }
+  .mark img { width: 96px; height: 96px; position: relative; z-index: 2; }
+  .mark svg { position: absolute; inset: 0; width: 132px; height: 132px; z-index: 1; }
+  .ring { transform-origin: center; transform-box: fill-box; }
+  .eyebrow { color: var(--accent-2); font-size: 14px; letter-spacing: 0.22em;
+    text-transform: uppercase; font-weight: 700; }
+  h1 { font-size: 52px; line-height: 1.05; font-weight: 800; }
+  h1 span { color: var(--accent); }
+  .sub { font-size: 20px; color: var(--muted); max-width: 520px; }
+  .slide-footer { position: absolute; bottom: 0; left: 0; right: 0; height: 26px;
+    display: flex; align-items: center; justify-content: space-between; padding: 0 18px;
+    z-index: 100; border-top: 1px solid rgba(255,255,255,0.08);
+    background: rgba(11,12,26,0.7); }
+  .brand { font-size: 10px; color: var(--muted); letter-spacing: 0.06em; font-weight: 600; }
+  .slide-num { font-size: 10px; color: var(--muted); font-weight: 600; }
+</style>
+<div class="slide">
+  <div class="mark">
+    <svg viewBox="0 0 132 132" aria-hidden="true">
+      <circle class="ring" cx="66" cy="66" r="60" fill="none" stroke="var(--accent)" stroke-width="2" opacity="0.5"/>
+    </svg>
+    <img src="./assets/visuals/spark.svg" alt="" data-anim data-anim-from="scale"/>
+  </div>
+  <div class="eyebrow" data-anim data-anim-from="fade">slides-animejs</div>
+  <h1 data-anim data-anim-from="up">Pattern tour <span>in five slides</span></h1>
+  <p class="sub" data-anim data-anim-from="up">Entrance choreography, signature idle, layout, step protocol, overlay.</p>
+</div>
+<div class="slide-footer">
+  <span class="brand">slides-animejs</span>
+  <span class="slide-num">1 / 5</span>
+</div>
+<script type="module">
+  import { animate } from "/assets/anime.esm.min.js";
+  // Signature idle: the accent ring breathes. We animate the inner <circle>
+  // (transform-box: fill-box) — never a <g transform>, which CSS scale would clobber.
+  window.__slideTL = window.__slideTL || {};
+  window.__slideTL[0] = (root) => {
+    const ring = root.querySelector('.ring');
+    const a = animate(ring, {
+      scale: [{ to: 1.06 }, { to: 1 }],
+      opacity: [{ to: 0.8 }, { to: 0.4 }],
+      duration: 2600, loop: true, alternate: true, ease: 'inOutSine',
+    });
+    return { cancel: () => { try { a.cancel?.(); } catch (e) {} } };
+  };
+</script>

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Ontotect"
+  short_description: "Systematic ontology engineering workflows"
+  default_prompt: "Use $ontotect for the user's request. If no request or arguments were supplied, execute help. Preserve any explicit Ontotect command; otherwise execute router, show the Route Card, and continue only within the stated mutation boundary."

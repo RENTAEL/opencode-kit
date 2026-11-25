@@ -1,0 +1,404 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# rpi — deterministic helpers for the rpi skill
+# Usage:
+#   rpi write  <plans|reviews|implementations|handoffs> --topic "..." [--ticket N]  # body on stdin
+#   rpi status <plan-file> <planned|in-progress|completed>
+#   rpi next   <plan-file>            # first unchecked task + its RED/GREEN/CHECK block
+#   rpi done   <plan-file> <task-id>  # mark **Task <id>** complete
+#   rpi dev    <plan-file> <task-id> "<one line>" [--report <path>]  # record a deviation on a task
+#   rpi pickup [path] [--list]        # resolve a handoff: latest, or given path
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# docs live in .rpi/ at the root of whatever repo we're invoked from
+dr="$(git -C "$PWD" rev-parse --show-toplevel 2>/dev/null || echo "$PWD")"
+REPO_ROOT="$dr"
+
+rel() { echo "${1#"$REPO_ROOT"/}"; }
+
+kebab_case() {
+  local s="$1"
+  # lowercase, replace non-alnum with -, collapse, trim
+  echo "$s" | tr '[:upper:]' '[:lower:]' \
+    | sed -E 's/[^a-z0-9]+/-/g; s/^-+//; s/-+$//; s/-+/-/g'
+}
+
+cmd_write() {
+  local subdir="" topic="" ticket="" status=""
+  # first positional arg is the subdir: plans|reviews|implementations|handoffs
+  if [[ "$1" != -* && -n "$1" ]]; then subdir="$1"; shift; fi
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --topic)    topic="$2"; shift 2 ;;
+      --ticket)   ticket="$2"; shift 2 ;;
+      --status)   status="$2"; shift 2 ;;
+      -h|--help)  usage_write; exit 0 ;;
+      *) echo "rpi write: unknown option: $1" >&2; usage_write >&2; exit 1 ;;
+    esac
+  done
+
+  if [[ -z "$subdir" || -z "$topic" ]]; then
+    echo "rpi write: subdir and --topic are required" >&2
+    usage_write >&2
+    exit 1
+  fi
+
+  local type="${subdir%s}"  # singular type for frontmatter
+  local front_status=""
+  case "$subdir" in
+    plans)          front_status="${status:-planned}" ;;
+    handoffs)       front_status="${status:-handed-off}" ;;
+    reviews|implementations) ;;
+    *) echo "rpi write: unknown subdir: $subdir (expected plans|reviews|implementations|handoffs)" >&2; exit 1 ;;
+  esac
+
+  local date
+  date="$(date +%Y-%m-%d)"
+  local slug
+  slug="$(kebab_case "$topic")"
+  if [[ -z "$slug" ]]; then
+    echo "rpi write: topic produced empty slug: $topic" >&2; exit 1
+  fi
+
+  # handoff session chain: inherit from newest existing handoff, append current session
+  local session_chain=""
+  if [[ "$type" == "handoff" ]]; then
+    local hdir="${REPO_ROOT}/.rpi/handoffs"
+    local newest
+    newest="$(ls -1 "$hdir" 2>/dev/null | sort -r | head -1 || true)"
+    if [[ -n "$newest" ]]; then
+      session_chain="$(awk '/^---$/{c++;next} c==1 && /^sessions:/{f=1;next} f && /^- /{sub(/^- +/,""); print; next} {f=0}' "$hdir/$newest")"
+    fi
+    local sid="${PI_SESSION_ID:-}"
+    if [[ -n "$sid" ]]; then
+      if [[ -n "$session_chain" ]] && ! grep -qx "$sid" <<<"$session_chain"; then
+        session_chain="$session_chain
+$sid"
+      elif [[ -z "$session_chain" ]]; then
+        session_chain="$sid"
+      fi
+    fi
+  fi
+
+  local filename
+  if [[ -n "$ticket" ]]; then
+    local ticket_slug
+    ticket_slug="$(kebab_case "$ticket")"
+    filename="${date}-$(date +%H%M%S)-${ticket_slug}-${slug}.md"
+  else
+    filename="${date}-$(date +%H%M%S)-${slug}.md"
+  fi
+
+  local body
+  body="$(cat)"
+
+  local outdir="${REPO_ROOT}/.rpi/${subdir}"
+  mkdir -p "$outdir"
+  local outpath="${outdir}/${filename}"
+  # avoid silent overwrite on same-second collisions
+  local n=2
+  while [[ -e "$outpath" ]]; do
+    outpath="${outdir}/${filename%.md}-${n}.md"
+    n=$((n+1))
+  done
+
+  {
+    echo "---"
+    echo "type: ${type}"
+    echo "date: ${date}"
+    if [[ -n "$topic" ]]; then
+      echo "topic: ${topic}"
+    fi
+    if [[ -n "$ticket" ]]; then
+      echo "ticket: ${ticket}"
+    fi
+    if [[ -n "$front_status" ]]; then
+      echo "status: ${front_status}"
+    fi
+    if [[ -n "$session_chain" ]]; then
+      echo "sessions:"
+      while IFS= read -r s; do echo "- ${s}"; done <<<"$session_chain"
+    fi
+    echo "---"
+    echo ""
+    printf "%s" "$body"
+    # ensure trailing newline
+    if [[ -n "$body" && "${body: -1}" != $'\n' ]]; then
+      echo ""
+    fi
+  } > "$outpath"
+
+  # layer 1 is the human's scan layer — warn, never fail, when it grows past its budget
+  if [[ "$subdir" == "plans" ]]; then
+    local l1_lines l1_prose
+    read -r l1_lines l1_prose < <(printf '%s\n' "$body" | awk '
+      /^## Checklist/ { exit }
+      /^```/ { fence = !fence; next }
+      fence { next }
+      { n++ }
+      /^[[:space:]]*$/ { next }
+      /^#/ { next }
+      /^[-|>]/ { next }
+      { p++ }
+      END { printf "%d %d\n", n + 0, p + 0 }
+    ')
+    if [[ "${l1_lines:-0}" -gt 35 ]]; then
+      echo "rpi write: L1 is ${l1_lines} lines (budget 35), ${l1_prose} of them prose — layer 1 is the scan layer, move justification below the fold" >&2
+    fi
+  fi
+
+  rel "$outpath"
+}
+
+cmd_status() {
+  if [[ $# -ne 2 ]]; then
+    echo "Usage: rpi status <plan-file> <planned|in-progress|completed|handed-off>" >&2
+    exit 1
+  fi
+  local file="$1" new_status="$2"
+  # resolve relative to repo root if not absolute
+  if [[ "$file" != /* ]]; then
+    file="${REPO_ROOT}/${file#.}"
+    # handle leading ./ or bare relative
+    file="$(realpath -m "$file" 2>/dev/null || echo "$file")"
+    # fallback: try as given relative to repo
+    if [[ ! -f "$file" ]]; then
+      file="${REPO_ROOT}/${1}"
+    fi
+  fi
+  if [[ ! -f "$file" ]]; then
+    echo "rpi status: file not found: $1" >&2; exit 1
+  fi
+  # replace the status: line in frontmatter (first occurrence between --- markers)
+  # use a Python one-liner for reliable YAML frontmatter handling would be overkill;
+  # simple sed for the first status: line is sufficient for our frontmatter shape
+  local tmp
+  tmp="$(mktemp)"
+  # only replace inside frontmatter (between first two --- lines)
+  awk -v ns="$new_status" '
+    BEGIN { in_fm=0; fm_count=0; replaced=0 }
+    /^---[[:space:]]*$/ {
+      fm_count++
+      if (fm_count==1) in_fm=1
+      else if (fm_count==2) in_fm=0
+      print; next
+    }
+    in_fm && !replaced && /^status:/ {
+      print "status: " ns
+      replaced=1
+      next
+    }
+    { print }
+    END {
+      if (!replaced) {
+        # no status line in frontmatter — insert before closing ---
+        # re-read and insert: simplest is to do a second pass if needed
+        # but for now, warn
+      }
+    }
+  ' "$file" > "$tmp"
+  # if no status line was replaced, insert it before the closing ---
+  if ! grep -q "^status: ${new_status}$" "$tmp"; then
+    awk -v ns="$new_status" '
+      BEGIN { fm_count=0 }
+      /^---[[:space:]]*$/ {
+        fm_count++
+        if (fm_count==2 && !done) {
+          print "status: " ns
+          done=1
+        }
+        print; next
+      }
+      { print }
+    ' "$tmp" > "${tmp}.2" && mv "${tmp}.2" "$tmp"
+  fi
+  mv "$tmp" "$file"
+  echo "$file -> status: $new_status"
+}
+
+cmd_next() {
+  if [[ $# -ne 1 ]]; then
+    echo "Usage: rpi next <plan-file>" >&2; exit 1
+  fi
+  local file; file="$(resolve_plan "$1")"
+  # only the checklist region holds tasks — a layer-1 success criterion is not a task.
+  # plans with no `## Checklist` heading (legacy) are scanned whole.
+  local scope=1
+  grep -q '^## Checklist' "$file" || scope=0
+  awk -v scope="$scope" '
+    BEGIN { in_checklist = (scope == 0) }
+    /^## Checklist/ { in_checklist = 1; next }
+    !in_checklist { next }
+    /^- \[ \] / { if (found) exit; found=1; print; next }
+    found && /^$/ { print; next }
+    found && /^[^[:space:]]/ { exit }
+    found { print }
+  ' "$file"
+  if ! awk -v scope="$scope" '
+    BEGIN { in_checklist = (scope == 0) }
+    /^## Checklist/ { in_checklist = 1 }
+    in_checklist && /^- \[ \] / { found = 1 }
+    END { exit !found }
+  ' "$file"; then
+    echo "(all done)"
+  fi
+}
+
+cmd_done() {
+  if [[ $# -ne 2 ]]; then
+    echo "Usage: rpi done <plan-file> <task-id>" >&2; exit 1
+  fi
+  local file; file="$(resolve_plan "$1")"
+  local task_id="$2"
+  if ! grep -Eq "^- \[ \] .*(\*\*)?[Tt]ask ${task_id}([:.]|$)" "$file"; then
+    echo "rpi done: no unchecked Task ${task_id} found in $file" >&2; exit 1
+  fi
+  local tmp; tmp="$(mktemp)"
+  awk -v tid="$task_id" '
+    !done && /^- \[ \] / && $0 ~ "([*][*])?[Tt]ask " tid "([:.]|$)" {
+      sub(/^- \[ \] /, "- [x] ")
+      done=1
+    }
+    { print }
+  ' "$file" > "$tmp" && mv "$tmp" "$file"
+  echo "Task ${task_id} marked complete in $file"
+}
+
+cmd_dev() {
+  if [[ $# -lt 3 ]]; then
+    echo 'Usage: rpi dev <plan-file> <task-id> "<one line>" [--report <path>]' >&2; exit 1
+  fi
+  local file; file="$(resolve_plan "$1")"
+  local task_id="$2" text="$3"
+  shift 3
+  local report=""
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --report) report="$2"; shift 2 ;;
+      *) echo "rpi dev: unknown option: $1" >&2; exit 1 ;;
+    esac
+  done
+  if ! grep -Eq "^- \[[ x]\] .*(\*\*)?[Tt]ask ${task_id}([:.]|$)" "$file"; then
+    echo "rpi dev: no Task ${task_id} found in $file" >&2; exit 1
+  fi
+  local line="  - dev $(date +%F) — ${text}"
+  if [[ -n "$report" ]]; then line="${line} → ${report}"; fi
+  if grep -Fq "$line" "$file"; then
+    echo "Task ${task_id} already records that deviation in $file"
+    return 0
+  fi
+  local tmp; tmp="$(mktemp)"
+  # land it as the last indented line of the task's block (so `rpi next` still
+  # prints it with the task). Blank lines are held back until the block's end is
+  # known, so trailing spacing does not end up above the deviation.
+  awk -v tid="$task_id" -v line="$line" '
+    function flush() {
+      if (in_task && !inserted) { print line; inserted = 1 }
+      for (i = 0; i < blanks; i++) print ""
+      blanks = 0
+    }
+    {
+      if (in_task && /^[[:space:]]*$/) { blanks++; next }
+      if (in_task && /^[^[:space:]]/) { flush(); in_task = 0 }
+      else if (blanks) { for (i = 0; i < blanks; i++) print ""; blanks = 0 }
+      print
+      if (!in_task && /^- \[[ x]\] / && $0 ~ ("([*][*])?[Tt]ask " tid "([:.]|$)")) in_task = 1
+    }
+    END { flush() }
+  ' "$file" > "$tmp" && mv "$tmp" "$file"
+  echo "Task ${task_id} deviation recorded in $file"
+}
+
+resolve_plan() {
+  local file="$1"
+  if [[ "$file" != /* && ! -f "$file" ]]; then
+    file="${REPO_ROOT}/${file}"
+  fi
+  if [[ ! -f "$file" ]]; then
+    echo "rpi: plan file not found: $1" >&2; exit 1
+  fi
+  echo "$file"
+}
+
+cmd_pickup() {
+  local file="" list=0
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --list) list=1; shift ;;
+      *) file="$1"; shift ;;
+    esac
+  done
+  if [[ "$list" -eq 1 ]]; then
+    local dir="${REPO_ROOT}/.rpi/handoffs"
+    if [[ ! -d "$dir" ]] || [[ -z "$(ls -A "$dir" 2>/dev/null)" ]]; then
+      echo "rpi pickup: no handoffs in ${dir}" >&2; exit 1
+    fi
+    ls -1 "$dir" | sort -r | sed "s|^|.rpi/handoffs/|"
+    return
+  fi
+  if [[ -z "$file" ]]; then
+    local dir="${REPO_ROOT}/.rpi/handoffs"
+    if [[ ! -d "$dir" ]] || [[ -z "$(ls -A "$dir" 2>/dev/null)" ]]; then
+      echo "rpi pickup: no handoffs in ${dir}" >&2; exit 1
+    fi
+    file="$dir/$(ls -1 "$dir" | sort -r | head -1)"
+  else
+    file="$(resolve_plan "$file")"
+  fi
+  # inject: path header + full content
+  echo "# handoff: $(rel "$file")"
+  echo
+  cat "$file"
+}
+
+usage() {
+  cat <<'USAGE'
+rpi — deterministic helpers for the rpi skill
+
+Usage:
+  rpi write  <plans|reviews|implementations|handoffs> --topic "..." [--ticket N]  # body on stdin
+  rpi status <plan-file> <planned|in-progress|completed|handed-off>
+  rpi next   <plan-file>            # first unchecked task + its RED/GREEN/CHECK block
+  rpi done   <plan-file> <task-id>  # mark **Task <id>** complete
+  rpi dev    <plan-file> <task-id> "<one line>" [--report <path>]  # record a deviation on a task
+
+Examples:
+  printf '# My plan\n...' | rpi write plans --topic "Auth refactor"
+  rpi status .rpi/plans/2026-08-30-auth-refactor.md in-progress
+  rpi next .rpi/plans/2026-08-30-auth-refactor.md
+  rpi done .rpi/plans/2026-08-30-auth-refactor.md 2
+  rpi dev .rpi/plans/2026-08-30-auth-refactor.md 2 "tsc ran on the host; the container was down"
+  rpi pickup .rpi/handoffs/2026-05-24-auth-refactor.md
+USAGE
+}
+
+usage_write() {
+  cat <<'USAGE'
+rpi write — create a .rpi document with deterministic frontmatter
+
+  --type     one of: plan, review, implement, handoff  (required)
+  --topic    human-readable topic, used for frontmatter and filename (required — a short generated title)
+  --ticket   optional ticket/issue id, included in filename and frontmatter
+  --status   override frontmatter status (plan→planned, handoff→handed-off by default)
+
+Writes to .rpi/<subdir>/YYYY-MM-DD-[ticket-]kebab-topic.md and prints the path.
+USAGE
+}
+
+main() {
+  if [[ $# -eq 0 ]]; then usage >&2; exit 1; fi
+  local cmd="$1"; shift
+  case "$cmd" in
+    write)  cmd_write "$@" ;;
+    status) cmd_status "$@" ;;
+    next)   cmd_next "$@" ;;
+    done)   cmd_done "$@" ;;
+    dev)    cmd_dev "$@" ;;
+    pickup) cmd_pickup "$@" ;;
+    -h|--help|help) usage; exit 0 ;;
+    *) echo "rpi: unknown subcommand: $cmd" >&2; usage >&2; exit 1 ;;
+  esac
+}
+
+main "$@"

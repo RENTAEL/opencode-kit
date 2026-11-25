@@ -1,0 +1,1651 @@
+#!/usr/bin/env python3
+"""Docforge dashboard runtime.
+
+Backs the dashboard capability of the `docforge` skill (the optional
+`/docforge-dashboard` skill is only a thin entrypoint into this cartridge).
+Builds and serves a local Fumadocs application under `<repo>/.docforge/dashboard/`
+from the Docforge manifest and the repository's `docs/` Markdown. The dashboard
+directory is self-contained: its own package.json, lockfile, and node_modules;
+it never touches the repository's package files.
+
+Subcommands: scan, start, status, stop. Python and JS peers are equivalent.
+
+`start` is idempotent: it scans for documentation problems, reconciles
+metadata, compares working-tree signatures, rebuilds generated output only
+when the render or shell signature changed (or `--force`), installs
+dependencies only when missing, starts (or reuses) the localhost dev server,
+and opens the browser. The dev server runs detached; `stop` shuts it down.
+`scan` is the read-only diagnostic pass: missing metadata, incomplete or
+missing documents, stale provenance sources, broken internal links,
+route-plan problems, and untracked `docs/` files -- each tagged blocking
+(would break a build) or advisory. `start`/`export` auto-migrate a legacy
+(pre-3.0) manifest instead of stopping to ask, since the metadata migration
+is safe and non-destructive; `scan`/`status` stay strictly read-only.
+"""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import os
+import posixpath
+import re
+import shutil
+import socket
+import subprocess
+import sys
+import time
+import urllib.request
+from datetime import datetime, timezone
+from pathlib import Path
+
+from runtime.common.python._util import (
+    dump_json,
+    ensure_docforge_gitignore,
+    fail,
+    load_manifest,
+    read_json,
+    unmanaged_paths,
+)
+from runtime.common.python.provenance_frontmatter import (
+    SUPPORTED_SCHEMA_VERSIONS,
+    parse_yaml_mapping,
+    split_frontmatter,
+)
+from runtime.common.python import provenance_store as store
+from runtime.common.python.evidence_hash import classify_source, raw_blob_hash
+from runtime.common.python.agent_context import AGENT_CONTEXT_GROUP
+from runtime.common.python.markdown_fences import scan_fences
+from runtime.manifest.python.migrate_metadata import (
+    MANIFEST_CURRENT,
+    migrate as migrate_manifest_metadata,
+)
+
+TOOL_VERSION = "2.28.0"
+TEMPLATE_VERSION = "1"
+STATE_SCHEMA = 1
+STATE_FILE = ".docforge-dashboard.json"
+BASE_URL = "/docs"
+DOC_PREFIX = "docs/"
+COMPACT_TYPE = "compact-doc"
+WRITTEN = {"generated", "needs_review", "complete"}
+INACTIVE = {"skipped", "retired"}
+NO_HUMAN_DOCS_MESSAGE = (
+    "no human-facing documentation to render; agent-context documents are excluded from the dashboard"
+)
+FRONTMATTER_HEAD_BYTES = 64 * 1024
+ASSET_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp", ".avif", ".ico", ".bmp"}
+ASSET_MAX_BYTES = 10 * 1024 * 1024
+LINK_RE = re.compile(r"(!?\[[^\]]*\])(\(([^)\s]+)(?:\s+[\"'][^\"']*[\"'])?\))")
+HEADING_RE = re.compile(r"^\s{0,3}(#{1,6})\s+(.+?)\s*#*\s*$")
+CUSTOM_ANCHOR_RE = re.compile(r"\[#([^\]]+)\]$")
+SCHEMES = ("http://", "https://", "mailto:", "tel:", "//")
+ENTITY = {"<": "&lt;", ">": "&gt;", "{": "&#123;", "}": "&#125;"}
+
+
+def now_iso() -> str:
+    return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+
+
+def sha256_bytes(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
+
+
+def title_for(doc: dict) -> str:
+    return doc.get("title") or doc["id"].replace("-", " ").replace("_", " ").title()
+
+
+def git_remote_url(repo: Path) -> str | None:
+    result = subprocess.run(
+        ["git", "-C", str(repo), "config", "--get", "remote.origin.url"],
+        capture_output=True, text=True, timeout=10,
+    )
+    value = result.stdout.strip() if result.returncode == 0 else ""
+    if not value:
+        return None
+    value = value.removesuffix(".git")
+    if value.startswith("git@"):
+        value = value.replace(":", "/", 1).replace("git@", "https://", 1)
+    if value.startswith(("http://", "https://")):
+        return value
+    return None
+
+
+def _root_doc_has_provenance(repo: Path, path: str, manifest: dict) -> bool:
+    meta = store.read_doc_metadata(repo, {"path": path})
+    if meta["state"] in {"ok", "inline"} and isinstance(meta["provenance"], dict):
+        return meta["provenance"].get("schema") in SUPPORTED_SCHEMA_VERSIONS
+    return False
+
+
+def read_frontmatter_head(target: Path) -> tuple[str, int] | None:
+    """Read only a document's frontmatter block from the file head (bounded
+    read; the body is never read). Returns (raw, body_start) or None when the
+    file has no frontmatter. Falls back to a full read only when the
+    frontmatter exceeds the head bound."""
+    try:
+        with open(target, "rb") as handle:
+            head = handle.read(FRONTMATTER_HEAD_BYTES)
+    except OSError:
+        return None
+    if not head.startswith(b"---\n"):
+        return None
+    end = head.find(b"\n---\n", 4)
+    if end < 0:
+        text = target.read_text(encoding="utf-8", errors="replace")
+        raw, body, _end = split_frontmatter(text)
+        if raw is None:
+            return None
+        return raw, len(text) - len(body)
+    return head[4:end].decode("utf-8", errors="replace"), end + len("\n---\n")
+
+
+def _manifest_provenance(doc: dict) -> bool:
+    """Root documents with `provenance_mode: manifest` (for example
+    `AGENTS.md`) carry no YAML frontmatter; their provenance lives in the
+    manifest instead."""
+    if doc.get("provenance_mode") != "manifest":
+        return False
+    provenance = doc.get("provenance")
+    return isinstance(provenance, dict) and provenance.get("schema") in SUPPORTED_SCHEMA_VERSIONS
+
+
+def dashboard_documents(manifest: dict) -> list[dict]:
+    """Manifest records in the human-facing dashboard scope."""
+    return [
+        doc for doc in manifest.get("documents", [])
+        if doc.get("group") != AGENT_CONTEXT_GROUP
+    ]
+
+
+def has_human_facing_documents(manifest: dict) -> bool:
+    return any(doc.get("status") not in INACTIVE for doc in dashboard_documents(manifest))
+
+
+def included_documents(repo: Path, manifest: dict) -> list[dict]:
+    out = []
+    for doc in dashboard_documents(manifest):
+        if doc.get("status") not in WRITTEN:
+            continue
+        path = doc.get("path", "")
+        if not (path.endswith(".md") or path.endswith(".mdx")):
+            continue
+        if not (path.startswith(DOC_PREFIX) or "/" not in path):
+            continue
+        if not (repo / path).is_file():
+            continue
+        if "/" not in path and not (_root_doc_has_provenance(repo, path, manifest) or _manifest_provenance(doc)):
+            continue
+        out.append(doc)
+    return sorted(out, key=lambda d: (d["path"], d["id"]))
+
+
+def route_for_doc(doc: dict) -> tuple[str, str]:
+    path = doc["path"]
+    if path.startswith(DOC_PREFIX):
+        rel = path[len(DOC_PREFIX):]
+        if rel == "README.md":
+            return "index.mdx", BASE_URL
+        if rel.endswith("/README.md"):
+            directory = rel[:-len("/README.md")]
+            return f"{directory}/index.mdx", f"{BASE_URL}/{directory}"
+        stem = rel[:-3] if rel.endswith(".md") else rel[:-4]
+        if doc.get("type") == COMPACT_TYPE:
+            # A merged compact file stands in for its folder's index, and its
+            # unfolded children still live in `docs/<stem>/`. Emitting
+            # `<stem>.mdx` collides with that directory, and Fumadocs resolves
+            # such a name to the folder — which drops the merged page from the
+            # sidebar entirely. Routing it as the folder's index keeps the URL
+            # byte-identical and nests the children under it.
+            return f"{stem}/index.mdx", f"{BASE_URL}/{stem}"
+        return f"{stem}.mdx", f"{BASE_URL}/{stem}"
+    stem = path[:-3] if path.endswith(".md") else path[:-4]
+    slug = stem.lower()
+    return f"root/{slug}.mdx", f"{BASE_URL}/root/{slug}"
+
+
+def build_ledger(docs: list[dict]) -> dict:
+    ledger = {"pages": [], "by_path": {}, "by_url": {}}
+    for doc in docs:
+        if doc.get("group") == AGENT_CONTEXT_GROUP:
+            continue
+        output, url = route_for_doc(doc)
+        page = {
+            "id": doc["id"],
+            "doc_id": doc["id"],
+            "doc": doc,
+            "title": title_for(doc),
+            "source_path": doc["path"],
+            "output_path": output,
+            "url": url,
+            "write_order": doc.get("write_order", 0),
+            "nav_order": doc.get("nav_order"),
+        }
+        ledger["pages"].append(page)
+        ledger["by_path"][doc["path"]] = page
+        ledger["by_url"][url] = page
+    return ledger
+
+
+def tree_files(repo: Path) -> list[str]:
+    root = repo / "docs"
+    if not root.is_dir():
+        return []
+    return sorted(
+        str(path.relative_to(repo)).replace("\\", "/")
+        for path in root.rglob("*")
+        if path.is_file()
+    )
+
+
+def _sorted_template_files(template_dir: Path) -> list[Path]:
+    return sorted(
+        (p for p in template_dir.rglob("*") if p.is_file()),
+        key=lambda p: str(p.relative_to(template_dir)),
+    )
+
+
+def _manifest_projection(manifest: dict) -> list[dict]:
+    """The manifest fields that affect rendered output: status, path, id,
+    title, description, write_order, and nav_order. Everything else (evidence,
+    selection, audit records, ...) does not change the site and must not
+    trigger a rebuild."""
+    docs = []
+    for doc in sorted(dashboard_documents(manifest), key=lambda d: d.get("path", "")):
+        entry = {
+            "id": doc.get("id", ""),
+            "title": title_for(doc),
+            "description": doc.get("description", ""),
+            "path": doc.get("path", ""),
+            "status": doc.get("status", ""),
+            "write_order": doc.get("write_order", 0),
+        }
+        if doc.get("nav_order") is not None:
+            entry["nav_order"] = doc["nav_order"]
+        docs.append(entry)
+    return docs
+
+
+def render_signature(repo: Path, manifest: dict) -> str:
+    """Working-tree signature of human-facing render inputs only.
+
+    Agent-context records are excluded by manifest group. Included Markdown,
+    renderable assets, render-relevant sidecar metadata, and the human manifest
+    projection remain; git state and repository package files do not."""
+    records: list[str] = []
+    projection = _manifest_projection(manifest)
+    rendered_docs = included_documents(repo, manifest)
+    for doc in projection:
+        records.append("doc\x00" + json.dumps(doc, sort_keys=True, separators=(",", ":"), ensure_ascii=False))
+    rendered_paths = {
+        doc["path"] for doc in rendered_docs
+        if doc["path"].startswith(DOC_PREFIX)
+    }
+    agent_paths = {
+        doc.get("path", "") for doc in manifest.get("documents", [])
+        if doc.get("group") == AGENT_CONTEXT_GROUP
+    }
+    rendered_paths.update(
+        rel for rel in tree_files(repo)
+        if rel.endswith(tuple(ASSET_EXTS)) and rel not in agent_paths
+    )
+    for rel in sorted(rendered_paths):
+        records.append(f"file\x00{rel}\x00{sha256_bytes((repo / rel).read_bytes())}")
+    for doc in rendered_docs:
+        rel = doc["path"]
+        entry = store.entry_for(repo, rel)
+        if entry is not None:
+            provenance = entry.get("provenance")
+            metadata = {
+                "description": entry.get("description") or "",
+                "id": entry.get("id") or "",
+                "path": rel,
+                "provenance_schema": provenance.get("schema", "") if isinstance(provenance, dict) else "",
+                "title": entry.get("title") or "",
+            }
+            records.append(
+                "metadata\x00" + json.dumps(
+                    metadata, sort_keys=True, separators=(",", ":"), ensure_ascii=False,
+                )
+            )
+        if "/" not in rel:
+            records.append(f"root\x00{rel}\x00{sha256_bytes((repo / rel).read_bytes())}")
+    settings = {
+        "base_url": BASE_URL,
+        "generator": TOOL_VERSION,
+        "include": "docs/**, root/*.md",
+    }
+    records.append("settings\x00" + json.dumps(settings, sort_keys=True, separators=(",", ":")))
+    return sha256_bytes("\n".join(records).encode("utf-8"))
+
+
+def shell_signature(template_dir: Path, repo: Path, manifest: dict) -> str:
+    """Signature of the Fumadocs application shell: template file bytes, the
+    per-project `lib/shared.ts` inputs (app name, repository URL), and the
+    template version."""
+    records: list[str] = []
+    for path in _sorted_template_files(template_dir):
+        rel = str(path.relative_to(template_dir)).replace("\\", "/")
+        records.append(f"template\x00{rel}\x00{sha256_bytes(path.read_bytes())}")
+    project = {
+        "name": manifest.get("project", {}).get("name") or repo.resolve().name,
+        "git_url": git_remote_url(repo) or "",
+    }
+    records.append("project\x00" + json.dumps(project, sort_keys=True, separators=(",", ":")))
+    records.append(f"template_version\x00{TEMPLATE_VERSION}")
+    return sha256_bytes("\n".join(records).encode("utf-8"))
+
+
+def state_path(dashboard: Path) -> Path:
+    return dashboard / STATE_FILE
+
+
+def load_state(dashboard: Path) -> dict:
+    path = state_path(dashboard)
+    if path.is_file():
+        try:
+            value = read_json(path)
+            if isinstance(value, dict):
+                return value
+        except ValueError:
+            pass
+    return {}
+
+
+def save_state(dashboard: Path, state: dict) -> None:
+    dashboard.mkdir(parents=True, exist_ok=True)
+    state_path(dashboard).write_text(dump_json(state), encoding="utf-8")
+
+
+def page_frontmatter(doc_id: str, title: str, description: str | None = None) -> str:
+    """Public frontmatter for converted dashboard pages: `id`, `title`, and
+    `description` (when present). `docforge_provenance` stays out of the
+    rendered site — the sidecar / manifest remain the authoritative store."""
+    lines = [
+        "---",
+        f"id: {json.dumps(doc_id, ensure_ascii=False)}",
+        f"title: {json.dumps(title, ensure_ascii=False)}",
+    ]
+    if description:
+        lines.append(f"description: {json.dumps(description, ensure_ascii=False)}")
+    lines.append("---")
+    return "\n".join(lines) + "\n"
+
+
+def reconcile_metadata(repo: Path, manifest: dict, dry_run: bool = False) -> dict:
+    report = {"reconciled": [], "unchanged": [], "skipped": [], "errors": []}
+    for doc in dashboard_documents(manifest):
+        if doc.get("status") in INACTIVE or doc.get("provenance_mode") == "manifest":
+            continue
+        path = doc.get("path", "")
+        if not path.startswith(DOC_PREFIX) or not path.endswith(".md"):
+            continue
+        target = repo / path
+        if not target.is_file():
+            continue
+        want_id = doc["id"]
+        want_title = title_for(doc)
+        want_description = doc.get("description") or ""
+        entry = store.entry_for(repo, path)
+        if entry is None:
+            report["skipped"].append({"doc": doc["id"], "detail": "no provenance entry"})
+            continue
+        provenance = entry.get("provenance")
+        if not isinstance(provenance, dict) or provenance.get("schema") not in SUPPORTED_SCHEMA_VERSIONS:
+            report["skipped"].append({"doc": doc["id"], "detail": "provenance schema unsupported"})
+            continue
+        problems = []
+        if entry.get("id") != want_id:
+            problems.append("id")
+        if entry.get("title") != want_title:
+            problems.append("title")
+        if (entry.get("description") or "") != want_description:
+            problems.append("description")
+        if provenance.get("doc_id") != want_id:
+            problems.append("provenance.doc_id")
+        if provenance.get("path") != path:
+            problems.append("provenance.path")
+        if not problems:
+            report["unchanged"].append({"doc": doc["id"]})
+            continue
+        entry_data = {"doc": doc["id"], "path": path, "fixed": problems}
+        if not dry_run:
+            updated = dict(entry)
+            updated["id"] = want_id
+            updated["title"] = want_title
+            if want_description:
+                updated["description"] = want_description
+            elif "description" in updated:
+                del updated["description"]
+            provenance["doc_id"] = want_id
+            provenance["path"] = path
+            updated["provenance"] = provenance
+            store.write_entry(repo, path, updated)
+        report["reconciled"].append(entry_data)
+    report["counts"] = {
+        "reconciled": len(report["reconciled"]),
+        "unchanged": len(report["unchanged"]),
+        "errors": len(report["errors"]),
+    }
+    return report
+
+
+def escape_mdx_text(line: str) -> str:
+    out: list[str] = []
+    in_code = False
+    for char in line:
+        if char == "`":
+            in_code = not in_code
+            out.append(char)
+        elif in_code:
+            out.append(char)
+        else:
+            out.append(ENTITY.get(char, char))
+    return "".join(out)
+
+
+def strip_html_comments(body: str) -> str:
+    """Remove HTML comments outside fenced and inline code.
+
+    Docforge keeps management markers such as ``<!-- docforge-children:start
+    -->`` in source Markdown so scaffolds can be re-expanded; the dashboard
+    must never render them. Comments (including multiline ones) are dropped
+    while the content between markers is kept, and comment text inside fenced
+    or inline code is preserved verbatim.
+    """
+    out: list[str] = []
+    in_fence = False
+    in_comment = False
+    for line in body.splitlines(keepends=True):
+        if line.lstrip().startswith("```"):
+            in_fence = not in_fence
+            out.append(line)
+            continue
+        if in_fence:
+            out.append(line)
+            continue
+        line_out: list[str] = []
+        in_code = False
+        i = 0
+        length = len(line)
+        while i < length:
+            char = line[i]
+            if in_comment:
+                end = line.find("-->", i)
+                if end < 0:
+                    i = length
+                    continue
+                in_comment = False
+                i = end + 3
+                continue
+            if char == "`":
+                in_code = not in_code
+                line_out.append(char)
+                i += 1
+                continue
+            if not in_code and line.startswith("<!--", i):
+                end = line.find("-->", i + 4)
+                if end < 0:
+                    in_comment = True
+                    i = length
+                    continue
+                i = end + 3
+                continue
+            line_out.append(char)
+            i += 1
+        out.append("".join(line_out))
+    return "".join(out)
+
+
+def resolve_link(target: str, source_path: str, ledger: dict, assets_needed: set[str]) -> str | None:
+    """Resolve a link target written in `source_path` through the route ledger.
+
+    Returns the rewritten URL; `target` unchanged when it is a bare fragment;
+    or None when the target is left untouched (external schemes, or an
+    internal target with no ledger page or asset)."""
+    index = target.find("#")
+    fragment = target[index:] if index >= 0 else ""
+    clean = target[:index] if index >= 0 else target
+    if not clean:
+        return target
+    if clean.startswith(SCHEMES) or clean.startswith("#"):
+        return None
+    base = posixpath.dirname(source_path)
+    repo_rel = clean.lstrip("/") if clean.startswith("/") else posixpath.normpath(posixpath.join(base, clean))
+    repo_rel = repo_rel.rstrip("/")
+    page = ledger["by_path"].get(repo_rel)
+    if page is None and not repo_rel.endswith(".md"):
+        page = ledger["by_path"].get(f"{repo_rel}/README.md")
+    if page is not None:
+        return page["url"] + fragment
+    if repo_rel in ledger["assets"]:
+        assets_needed.add(repo_rel)
+        return f"/docs-assets/{repo_rel}" + fragment
+    return None
+
+
+def convert_body(body: str, source_path: str, ledger: dict, assets_needed: set[str]) -> tuple[str, list[str]]:
+    unresolved: list[str] = []
+    body = strip_html_comments(body)
+
+    def replace(match: re.Match) -> str:
+        inner = match.group(3)
+        rewritten = resolve_link(inner, source_path, ledger, assets_needed)
+        if rewritten is None or rewritten == inner:
+            return match.group(0)
+        return f"{match.group(1)}({rewritten})"
+
+    in_fence = False
+    lines: list[str] = []
+    for line in body.splitlines(keepends=True):
+        stripped = line.lstrip()
+        if stripped.startswith("```"):
+            in_fence = not in_fence
+            lines.append(line)
+            continue
+        converted_line = escape_mdx_text(line) if not in_fence else line
+        lines.append(LINK_RE.sub(replace, converted_line) if not in_fence else converted_line)
+    return "".join(lines), unresolved
+
+
+def first_h1_title(body: str) -> str | None:
+    """Extract the first H1 heading as the document's meaningful title.
+
+    Strips Fumadocs heading markers (`[!toc]`, `[toc]`, `[#custom-id]`),
+    link syntax, and inline formatting. Returns None when there is no H1 so
+    callers can fall back to the manifest title.
+    """
+    for line in body.splitlines():
+        match = re.match(r"^\s{0,3}#\s+(.+?)\s*#*\s*$", line)
+        if not match:
+            continue
+        text = match.group(1)
+        text = re.sub(r"(\s*\[(?:[!#]|toc)[^\]]*\])+\s*$", "", text)
+        text = re.sub(r"\[([^\]]+)\]\([^)]*\)", r"\1", text)
+        text = re.sub(r"[*_`]", "", text)
+        text = re.sub(r"\s+", " ", text).strip()
+        if text:
+            return text
+    return None
+
+
+def heading_anchors(text: str) -> list[str]:
+    anchors: list[str] = []
+    for line in text.splitlines():
+        match = HEADING_RE.match(line)
+        if not match:
+            continue
+        content = match.group(2).strip()
+        custom = CUSTOM_ANCHOR_RE.search(content)
+        if custom:
+            anchors.append(custom.group(1))
+            continue
+        slug = re.sub(r"[^\w\s-]", "", content).lower()
+        slug = re.sub(r"\s+", "-", slug).strip("-")
+        anchors.append(slug)
+    return anchors
+
+
+def collect_asset_map(repo: Path) -> set[str]:
+    return {
+        rel for rel in tree_files(repo)
+        if rel.endswith(tuple(ASSET_EXTS))
+    }
+
+
+def blob_sha1(content: bytes) -> str:
+    return raw_blob_hash(content)
+
+
+# Every ```mermaid fence across the included documents, as a validation task.
+# `scan_fences` already skips anything inside a nested/unrelated fence type.
+def mermaid_tasks(repo: Path, manifest: dict) -> list[dict]:
+    tasks: list[dict] = []
+    for doc in included_documents(repo, manifest):
+        text = (repo / doc["path"]).read_text(encoding="utf-8", errors="replace")
+        for fence in scan_fences(text):
+            if fence["language"] != "mermaid":
+                continue
+            chart = "\n".join(line for _, line in fence["lines"])
+            tasks.append({"doc": doc["id"], "line": fence["start"], "chart": chart})
+    return tasks
+
+
+# Real Mermaid parsing, via the dashboard instance's own `mermaid`/`jsdom`
+# (installed by `ensure_dependencies`) -- not the dependency-free static
+# checks the rest of `scan` performs. `validate_mermaid.mjs` runs from
+# inside `dashboard_dir` so those packages resolve from its own
+# `node_modules`; it is copied there by `scaffold_app`, so it may not exist
+# yet on the very first pass before a build has ever run.
+def mermaid_findings(repo: Path, manifest: dict, dashboard_dir: Path) -> dict:
+    empty = {"problems": [], "counts": {"invalid_mermaid": 0}, "blocking": False}
+    tasks = mermaid_tasks(repo, manifest)
+    if not tasks:
+        return empty
+    script = dashboard_dir / "scripts" / "validate_mermaid.mjs"
+    # Guards the case where `ensure_dependencies` ran but `mermaid` still
+    # isn't actually there -- a corrupted/interrupted install, or a fully
+    # faked one, as this repo's own tests do to stay npm-network-free. Skip
+    # rather than crash the whole build on a check we cannot actually run;
+    # the browser-side error boundary (mermaid.tsx) is the remaining net.
+    if not script.is_file() or not (dashboard_dir / "node_modules" / "mermaid").is_dir():
+        return empty
+    try:
+        result = subprocess.run(
+            ["node", str(script)],
+            input=json.dumps([{"chart": task["chart"]} for task in tasks]),
+            cwd=str(dashboard_dir),
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+    except OSError as exc:
+        raise ValueError(f"mermaid validation failed to run: {exc}") from exc
+    if result.returncode != 0:
+        raise ValueError(f"mermaid validation failed to run: {result.stderr}")
+    try:
+        verdicts = json.loads(result.stdout)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"mermaid validation produced invalid output: {exc}") from exc
+    problems = []
+    for task, verdict in zip(tasks, verdicts):
+        if verdict.get("ok"):
+            continue
+        problems.append({
+            "kind": "invalid_mermaid", "doc": task["doc"],
+            "detail": f"line {task['line']}: {verdict.get('error')}", "blocking": True,
+        })
+    return {"problems": problems, "counts": {"invalid_mermaid": len(problems)}, "blocking": bool(problems)}
+
+
+def scan(repo: Path, manifest: dict, dashboard_dir: Path | None = None) -> dict:
+    """Read-only diagnostics over the manifest and `docs/` tree.
+
+    Reports metadata problems (missing / unparseable / non-schema-2.0
+    frontmatter), incomplete or missing documents, provenance source drift,
+    broken internal Markdown links, route-plan problems (missing index,
+    duplicate URLs), and untracked `docs/` files. Self-managed docs (the
+    manifest's `project.unmanaged_docs`) and everything under `docs/_archive/`
+    are known and never reported as `untracked`. Every finding is tagged
+    `blocking` (would actually break a build: `route_plan`, `broken_link`, and
+    `metadata` on a document that would be included) or advisory (safe to
+    ignore for now: `incomplete`, `missing_file`, `drift`, `untracked`); any
+    finding still means the documentation should be revised, but only a
+    blocking one stops `start`/`export` before attempting to render."""
+    self_managed = unmanaged_paths(manifest)
+    kinds = ("metadata", "incomplete", "missing_file", "drift", "untracked", "broken_link", "route_plan", "invalid_mermaid")
+    if not has_human_facing_documents(manifest):
+        return {
+            "problems": [],
+            "counts": {kind: 0 for kind in kinds},
+            "unmanaged": sorted(self_managed),
+            "blocking": False,
+            "no_human_docs": True,
+            "message": NO_HUMAN_DOCS_MESSAGE,
+        }
+
+    human_docs = dashboard_documents(manifest)
+    docs = included_documents(repo, manifest)
+    included_ids = {doc["id"] for doc in docs}
+    problems: list[dict] = []
+    report = reconcile_metadata(repo, manifest, dry_run=True)
+    for entry in report["errors"] + report["skipped"]:
+        problems.append({"kind": "metadata", "doc": entry["doc"], "detail": entry["detail"], "blocking": entry["doc"] in included_ids})
+    for doc in human_docs:
+        path = doc.get("path", "")
+        if not (path.endswith(".md") or path.endswith(".mdx")):
+            continue
+        if doc.get("status") not in WRITTEN:
+            problems.append({"kind": "incomplete", "doc": doc.get("id", ""), "detail": f"status {doc.get('status')}", "blocking": False})
+            continue
+        if not (repo / path).is_file():
+            problems.append({"kind": "missing_file", "doc": doc.get("id", ""), "detail": path, "blocking": False})
+    for doc in human_docs:
+        provenance = doc.get("provenance")
+        if not isinstance(provenance, dict) or provenance.get("schema") not in SUPPORTED_SCHEMA_VERSIONS:
+            continue
+        for section in provenance.get("sections", []):
+            for source in section.get("sources", []):
+                source_path = source.get("path")
+                if not source_path or not source.get("git_blob"):
+                    continue
+                target = repo / source_path
+                current_bytes = target.read_bytes() if target.is_file() else None
+                outcome = classify_source(source, current_bytes)
+                if outcome == "missing":
+                    problems.append({"kind": "drift", "doc": doc.get("id", ""), "detail": f"{source_path} missing", "blocking": False})
+                elif outcome == "stale":
+                    problems.append({"kind": "drift", "doc": doc.get("id", ""), "detail": f"{source_path} changed since provenance", "blocking": False})
+    ledger = build_ledger(docs)
+    ledger["assets"] = collect_asset_map(repo)
+    tracked = {doc.get("path") for doc in manifest.get("documents", []) if doc.get("path")}
+    for rel in tree_files(repo):
+        if not rel.endswith((".md", ".mdx")) or rel in tracked:
+            continue
+        if "/_archive/" in f"/{rel}" or rel.startswith("_archive/") or rel in self_managed:
+            continue
+        problems.append({"kind": "untracked", "doc": "", "detail": rel, "blocking": False})
+    for doc in docs:
+        text = (repo / doc["path"]).read_text(encoding="utf-8", errors="replace")
+        raw, body, _end = split_frontmatter(text)
+        if raw is None:
+            body = text
+        for match in LINK_RE.finditer(body):
+            inner = match.group(3)
+            if resolve_link(inner, doc["path"], ledger, set()) is not None:
+                continue
+            clean = inner.split("#", 1)[0]
+            if not clean or clean.startswith(SCHEMES) or clean.startswith("#"):
+                continue
+            repo_rel = clean.lstrip("/") if clean.startswith("/") else posixpath.normpath(
+                posixpath.join(posixpath.dirname(doc["path"]), clean)
+            )
+            repo_rel = repo_rel.rstrip("/")
+            if re.search(r"\.mdx?(?:#|$)", repo_rel) and (
+                repo_rel.startswith(DOC_PREFIX) or "/" not in repo_rel
+            ):
+                problems.append({"kind": "broken_link", "doc": doc["id"], "detail": f"{doc['path']}: {inner}", "blocking": True})
+    route_plan = plan(repo, manifest)
+    for detail in route_plan["problems"]:
+        problems.append({"kind": "route_plan", "doc": "", "detail": detail, "blocking": True})
+    # Opportunistic: real Mermaid validation needs `mermaid`/`jsdom`, which only
+    # exist once a prior `start`/`export` has installed the dashboard's
+    # `node_modules`. `scan` stays instant and dependency-free otherwise, so a
+    # fresh repo's first `scan` never pays for or requires an npm install; a
+    # failure here (rather than a missing install) is swallowed rather than
+    # taking down the rest of scan's diagnostics.
+    if dashboard_dir is not None and (dashboard_dir / "node_modules" / "mermaid").is_dir():
+        try:
+            problems.extend(mermaid_findings(repo, manifest, dashboard_dir)["problems"])
+        except ValueError:
+            pass  # best-effort; the mandatory gate in prepare_dashboard still catches this
+    counts = {kind: sum(1 for p in problems if p["kind"] == kind) for kind in kinds}
+    return {
+        "problems": problems,
+        "counts": counts,
+        "unmanaged": sorted(self_managed),
+        "blocking": any(p["blocking"] for p in problems),
+        "no_human_docs": False,
+        "message": None,
+    }
+
+
+def unrendered_documents(repo: Path, manifest: dict, ledger: dict) -> list[str]:
+    """Documents the manifest calls written that produced no page.
+
+    `included_documents` drops such a record silently -- a file that is not on
+    disk, a root document whose provenance did not parse -- and Fumadocs then
+    hard-404s the slug with no directory fallback. Nothing else notices:
+    `readme_child_coverage` skips a child that is not a file, and this planner
+    previously validated only the root index. A `planned` document correctly
+    has no page yet and is not reported."""
+    rendered = {page["source_path"] for page in ledger["pages"]}
+    problems: list[str] = []
+    for doc in dashboard_documents(manifest):
+        path = doc.get("path", "")
+        if not path.startswith(DOC_PREFIX) or not path.endswith((".md", ".mdx")):
+            continue
+        if doc.get("status") not in WRITTEN or path in rendered:
+            continue
+        reason = (
+            "file missing from the working tree"
+            if not (repo / path).is_file()
+            else "excluded from the page ledger"
+        )
+        problems.append(f"no page for {path} ({doc.get('id')}): {reason}")
+    return sorted(problems)
+
+
+def plan(repo: Path, manifest: dict) -> dict:
+    docs = included_documents(repo, manifest)
+    ledger = build_ledger(docs)
+    no_human_docs = not has_human_facing_documents(manifest)
+    problems: list[str] = []
+    folded: dict[str, str] = {}
+    for page in ledger["pages"]:
+        key = page["url"].lower()
+        if key in folded:
+            problems.append(f"duplicate url: {page['url']} (docs {folded[key]} and {page['source_path']})")
+        else:
+            folded[key] = page["source_path"]
+    by_dir: dict[str, list[dict]] = {}
+    for page in ledger["pages"]:
+        by_dir.setdefault(posixpath.dirname(page["output_path"]), []).append(page)
+    missing_index = any(page["url"] == BASE_URL for page in ledger["pages"])
+    if not missing_index and not no_human_docs:
+        problems.append("no docs index: docs/README.md is not a written document")
+    problems.extend(unrendered_documents(repo, manifest, ledger))
+    return {
+        "base_url": BASE_URL,
+        "pages": ledger["pages"],
+        "folder_count": len(by_dir),
+        "problems": problems,
+        "no_human_docs": no_human_docs,
+    }
+
+
+def meta_title(folder: str, ledger: dict, manifest: dict) -> str:
+    for page in ledger["pages"]:
+        if page["output_path"] == (f"{folder}/index.mdx" if folder else "index.mdx"):
+            return page["title"]
+    if folder == "":
+        for doc in dashboard_documents(manifest):
+            if doc.get("id") == "docs_index":
+                return title_for(doc)
+    if folder == "root":
+        return "Project"
+    name = posixpath.basename(folder)
+    return name.replace("-", " ").replace("_", " ").title()
+
+
+def page_order(page: dict) -> int:
+    """Navigation order of a page: the curated `nav_order` when present
+    (reader-first sidebar), falling back to the generation `write_order`."""
+    nav = page.get("nav_order")
+    return nav if isinstance(nav, int) else page["write_order"]
+
+
+def meta_plans(ledger: dict, manifest: dict) -> dict[str, dict]:
+    folders: dict[str, dict] = {}
+    for page in ledger["pages"]:
+        folder = posixpath.dirname(page["output_path"])
+        folders.setdefault(folder, {"index": None, "files": [], "orders": {}})
+        if posixpath.basename(page["output_path"]) == "index.mdx":
+            folders[folder]["index"] = page
+        else:
+            folders[folder]["files"].append(page)
+        folders[folder]["orders"][page["doc_id"]] = page_order(page)
+    for folder in folders:
+        folders[folder]["files"].sort(key=lambda p: (page_order(p), p["source_path"]))
+
+    def folder_order(folder: str) -> tuple[int, str]:
+        """Meaningful order: a folder is ordered by its index document's
+        nav_order (falling back to the manifest write_order), else by the
+        smallest order among its pages, with the folder name as the
+        deterministic tie-break. The `root` folder (repository-root files
+        such as README.md and CHANGELOG.md) always sorts last."""
+        if folder == "root":
+            return (10**9, folder)
+        info = folders.get(folder)
+        if info is None:
+            return (10**9, folder)
+        if info["index"] is not None:
+            return (page_order(info["index"]), folder)
+        return (min((page_order(p) for p in info["files"]), default=10**9), folder)
+
+    plans: dict[str, dict] = {}
+    for folder, info in folders.items():
+        names = {
+            posixpath.relpath(other, folder).split("/", 1)[0]
+            for other in folders
+            if other != folder and (not folder or other.startswith(folder + "/"))
+        }
+        entries: list[tuple[tuple[int, str], str]] = []
+        for name in names:
+            order, _ = folder_order(posixpath.join(folder, name))
+            entries.append(((order, name), name))
+        for page in info["files"]:
+            stem = posixpath.splitext(posixpath.basename(page["output_path"]))[0]
+            entries.append(((page_order(page), stem), stem))
+        entries.sort(key=lambda item: item[0])
+        pages = []
+        if info["index"] is not None:
+            pages.append("index")
+        # A folder name and a sibling page stem can collide (`reference/` next
+        # to `reference.mdx`). Fumadocs resolves the name to the folder and
+        # would then render that folder node once per entry, so keep the first
+        # occurrence and drop the rest.
+        seen = set(pages)
+        for _, name in entries:
+            if name in seen:
+                continue
+            seen.add(name)
+            pages.append(name)
+        plans[folder] = {
+            "path": f"{folder}/meta.json" if folder else "meta.json",
+            "title": meta_title(folder, ledger, manifest),
+            "pages": pages,
+        }
+    return plans
+
+
+def convert_documents(repo: Path, manifest: dict, ledger: dict, stage_docs: Path) -> dict:
+    assets_needed: set[str] = set()
+    anchors: dict[str, list[str]] = {}
+    converted = []
+    for doc in ledger["pages"]:
+        source = repo / doc["source_path"]
+        text = source.read_text(encoding="utf-8", errors="replace")
+        manifest_doc = doc.get("doc") or {}
+        raw, body, _end = split_frontmatter(text)
+        public: dict = {}
+        if raw is None:
+            meta = store.read_doc_metadata(repo, {"path": doc["source_path"]})
+            if meta["state"] != "ok" or not isinstance(meta["provenance"], dict):
+                provenance = manifest_doc.get("provenance")
+                if (
+                    manifest_doc.get("provenance_mode") != "manifest"
+                    or not isinstance(provenance, dict)
+                    or provenance.get("schema") not in SUPPORTED_SCHEMA_VERSIONS
+                ):
+                    raise ValueError(f"document has no provenance entry: {doc['source_path']}")
+            else:
+                provenance = meta["provenance"]
+                public = {k: v for k, v in (meta["public"] or {}).items() if v}
+        elif raw is None:
+            provenance = manifest_doc.get("provenance")
+            if (
+                manifest_doc.get("provenance_mode") != "manifest"
+                or not isinstance(provenance, dict)
+                or provenance.get("schema") not in SUPPORTED_SCHEMA_VERSIONS
+            ):
+                raise ValueError(f"document has no frontmatter: {doc['source_path']}")
+        else:
+            try:
+                data = parse_yaml_mapping(raw)
+            except Exception as exc:  # noqa: BLE001
+                raise ValueError(f"unparseable frontmatter: {doc['source_path']}: {exc}") from exc
+            provenance = data.get("docforge_provenance")
+            if not isinstance(provenance, dict) or provenance.get("schema") not in SUPPORTED_SCHEMA_VERSIONS:
+                raise ValueError(f"provenance schema unsupported: {doc['source_path']}")
+            public = {key: data.get(key) for key in ("id", "title", "description") if data.get(key)}
+        mdx_body, unresolved = convert_body(body, doc["source_path"], ledger, assets_needed)
+        h1_title = first_h1_title(body)
+        if h1_title:
+            doc["title"] = h1_title
+        page = {"id": public.get("id") or doc["doc_id"], "title": doc["title"]}
+        content = page_frontmatter(
+            page["id"],
+            page["title"],
+            public.get("description") or manifest_doc.get("description"),
+        ) + mdx_body
+        target = stage_docs / doc["output_path"]
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(content, encoding="utf-8")
+        anchors[doc["url"]] = heading_anchors(mdx_body)
+        converted.append({"doc": doc["doc_id"], "url": doc["url"], "output": doc["output_path"], "unresolved": unresolved})
+    return {"converted": converted, "assets_needed": sorted(assets_needed), "anchors": anchors}
+
+
+def copy_assets(repo: Path, target_assets_dir: Path, assets: list[str]) -> list[str]:
+    copied = []
+    for rel in assets:
+        source = repo / rel
+        if not source.is_file() or not rel.endswith(tuple(ASSET_EXTS)):
+            continue
+        if source.stat().st_size > ASSET_MAX_BYTES:
+            continue
+        target = target_assets_dir / rel
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, target)
+        copied.append(rel)
+    return copied
+
+
+def swap_stage(dashboard: Path, stage_docs: Path, stage_assets: Path) -> None:
+    content_target = dashboard / "content" / "docs"
+    if content_target.exists():
+        shutil.rmtree(content_target)
+    os.rename(stage_docs, content_target)
+    assets_target = dashboard / "public" / "docs-assets"
+    if assets_target.exists():
+        shutil.rmtree(assets_target)
+    if stage_assets.exists():
+        os.rename(stage_assets, assets_target)
+
+
+def validate_build(repo: Path, manifest: dict, content_dir: Path, assets_dir: Path) -> dict:
+    docs = included_documents(repo, manifest)
+    ledger = build_ledger(docs)
+    errors: list[str] = []
+    warnings: list[str] = []
+    folded: dict[str, str] = {}
+    for page in ledger["pages"]:
+        key = page["url"].lower()
+        if key in folded:
+            errors.append(f"duplicate url: {page['url']} ({folded[key]}, {page['source_path']})")
+        else:
+            folded[key] = page["source_path"]
+        output = content_dir / page["output_path"]
+        if not output.is_file():
+            errors.append(f"missing output: {page['output_path']} ({page['url']})")
+    if not (content_dir / "index.mdx").is_file():
+        errors.append("missing docs index: content/docs/index.mdx")
+    url_to_page = {page["url"]: page for page in ledger["pages"]}
+    anchors: dict[str, set[str]] = {}
+    for page in ledger["pages"]:
+        output = content_dir / page["output_path"]
+        if output.is_file():
+            anchors[page["url"]] = set(heading_anchors(output.read_text(encoding="utf-8", errors="replace")))
+    link_re = re.compile(r"\]\(([^)]+)\)")
+    for page in ledger["pages"]:
+        output = content_dir / page["output_path"]
+        if not output.is_file():
+            continue
+        text = output.read_text(encoding="utf-8", errors="replace")
+        for match in link_re.finditer(text):
+            target = match.group(1).strip()
+            if target.startswith(("#", "http://", "https://", "mailto:", "tel:", "//")):
+                continue
+            if target.startswith(f"{BASE_URL}/") or target == BASE_URL or target.startswith(f"{BASE_URL}#"):
+                hash_index = target.find("#")
+                url = target[:hash_index] if hash_index >= 0 else target
+                fragment = target[hash_index:] if hash_index >= 0 else ""
+                if url not in url_to_page:
+                    errors.append(f"broken link in {page['output_path']}: {target}")
+                    continue
+                if fragment and fragment.lstrip("#") not in anchors.get(url, set()):
+                    errors.append(f"broken anchor in {page['output_path']}: {target}")
+            elif target.startswith("/docs-assets/"):
+                asset = target[len("/docs-assets/"):].split("#", 1)[0]
+                if not (assets_dir / asset).is_file():
+                    errors.append(f"missing asset in {page['output_path']}: {target}")
+            else:
+                target_path = target.split("#", 1)[0]
+                normalized = posixpath.normpath(
+                    posixpath.join(DOC_PREFIX, posixpath.dirname(page["output_path"]), target_path)
+                )
+                if re.search(r"\.mdx?(?:#|$)", normalized) and (
+                    normalized.startswith(DOC_PREFIX) or "/" not in normalized
+                ):
+                    errors.append(f"unresolved internal link in {page['output_path']}: {target}")
+                else:
+                    warnings.append(f"unresolved target in {page['output_path']}: {target}")
+    meta_paths = sorted((content_dir / "meta.json").parent.rglob("meta.json")) if (content_dir / "meta.json").exists() else []
+    for meta_file in meta_paths:
+        folder = str(meta_file.parent.relative_to(content_dir)).replace("\\", "/")
+        if folder == ".":
+            folder = ""
+        try:
+            data = read_json(meta_file)
+        except ValueError:
+            errors.append(f"invalid meta.json: {meta_file}")
+            continue
+        expected_children = set()
+        for page in ledger["pages"]:
+            parent = posixpath.dirname(page["output_path"])
+            if parent == folder:
+                expected_children.add(posixpath.splitext(posixpath.basename(page["output_path"]))[0])
+        for child in sorted((meta_file.parent).iterdir()):
+            if child.is_dir() and (child / "meta.json").is_file():
+                expected_children.add(child.name)
+        listed = list(data.get("pages", []))
+        actual = set(listed)
+        for missing in sorted(expected_children - actual):
+            errors.append(f"meta coverage missing in {meta_file.relative_to(dashboard)}: {missing}")
+        for extra in sorted(actual - expected_children):
+            errors.append(f"meta coverage extra in {meta_file.relative_to(dashboard)}: {extra}")
+        # Compare the list, not just the set: a duplicated entry renders the
+        # same sidebar node twice and would otherwise pass silently.
+        for duplicate in sorted({name for name in listed if listed.count(name) > 1}):
+            errors.append(f"meta duplicate entry in {meta_file.relative_to(dashboard)}: {duplicate}")
+    return {
+        "ok": not errors,
+        "errors": errors,
+        "warnings": warnings,
+        "counts": {
+            "pages": len(ledger["pages"]),
+            "meta_files": len(meta_paths),
+        },
+    }
+
+
+def ensure_dashboard_ignored(dashboard: Path) -> None:
+    """Keep `.docforge/.gitignore` authoritative for Docforge's ephemeral dirs
+    (shared rules) and additionally declare the dashboard directory itself."""
+    ensure_docforge_gitignore(dashboard.parent)
+    gitignore = dashboard.parent / ".gitignore"
+    lines = gitignore.read_text(encoding="utf-8").splitlines()
+    if "dashboard/" not in lines:
+        text = gitignore.read_text(encoding="utf-8")
+        suffix = "" if not text or text.endswith("\n") else "\n"
+        gitignore.write_text(text + suffix + "dashboard/\n", encoding="utf-8")
+
+
+def scaffold_app(dashboard: Path, template_dir: Path, repo: Path, manifest: dict, force: bool = False) -> bool:
+    current = load_state(dashboard)
+    sha = shell_signature(template_dir, repo, manifest)
+    if not force and current.get("shell_sig") == sha and (dashboard / "lib" / "shared.ts").is_file():
+        return False
+    for name in ("app", "components", "lib", "scripts", "next.config.mjs", "tsconfig.json", "postcss.config.mjs", "package.json", ".gitignore", "README.md"):
+        source = template_dir / name
+        target = dashboard / name
+        if source.is_dir():
+            if target.exists():
+                shutil.rmtree(target)
+            shutil.copytree(source, target)
+        elif source.is_file():
+            shutil.copy2(source, target)
+    project_name = manifest.get("project", {}).get("name") or repo.resolve().name
+    git_url = git_remote_url(repo) or ""
+    tpl = (template_dir / "lib" / "shared.ts.tpl").read_text(encoding="utf-8")
+    shared = tpl.replace("{{APP_NAME}}", project_name).replace("{{GITHUB_URL}}", git_url)
+    (dashboard / "lib" / "shared.ts").write_text(shared, encoding="utf-8")
+    ensure_dashboard_ignored(dashboard)
+    return True
+
+
+def node_major() -> int:
+    try:
+        result = subprocess.run(["node", "--version"], capture_output=True, text=True, timeout=10)
+        version = result.stdout.strip().lstrip("v") if result.returncode == 0 else ""
+        return int(version.split(".", 1)[0]) if version else 0
+    except Exception:  # noqa: BLE001
+        return 0
+
+
+def build_dashboard(dashboard: Path) -> None:
+    """Static HTML export: `next build` emits plain .html files under `out/`
+    (the app is a static-export Next.js app, `output: 'export'`)."""
+    env = dict(os.environ, NEXT_TELEMETRY_DISABLED="1")
+    try:
+        subprocess.run(
+            ["npm", "--prefix", str(dashboard), "run", "build"],
+            cwd=str(dashboard),
+            env=env,
+            check=True,
+            timeout=1200,
+        )
+    except subprocess.CalledProcessError as exc:
+        raise ValueError(f"dashboard export failed (exit {exc.returncode}); see the dashboard directory for logs") from exc
+
+
+def export_signature(render_sig: str, shell_sig: str) -> str:
+    return sha256_bytes(f"{render_sig}\n{shell_sig}".encode("utf-8"))
+
+
+def ensure_dependencies(dashboard: Path, repo: Path) -> None:
+    if node_major() < 22:
+        raise ValueError("dashboard requires Node.js 22 or newer; install it before running /docforge-dashboard")
+    root_guards = {}
+    for name in ("package.json", "package-lock.json"):
+        root_file = repo / name
+        if root_file.is_file():
+            root_guards[name] = sha256_bytes(root_file.read_bytes())
+    node_modules = dashboard / "node_modules"
+    lockfile = dashboard / "package-lock.json"
+    if not node_modules.is_dir() or not lockfile.is_file():
+        command = ["npm", "--prefix", str(dashboard), "install"]
+    else:
+        command = ["npm", "--prefix", str(dashboard), "ci"]
+    env = dict(os.environ, NEXT_TELEMETRY_DISABLED="1")
+    try:
+        subprocess.run(command, cwd=str(dashboard), env=env, check=True, timeout=900)
+    except subprocess.CalledProcessError as exc:
+        raise ValueError(f"npm install failed (exit {exc.returncode}); see the dashboard directory for logs") from exc
+    for name, before in root_guards.items():
+        after = sha256_bytes((repo / name).read_bytes()) if (repo / name).is_file() else None
+        if after != before:
+            raise ValueError(f"dashboard touched the repository's {name}; refusing to continue")
+
+
+def free_port() -> int:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind(("127.0.0.1", 0))
+        return sock.getsockname()[1]
+
+
+def pid_alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+        return True
+    except (ProcessLookupError, PermissionError):
+        return False
+    except OSError:
+        return False
+
+
+def server_up(port: int) -> bool:
+    try:
+        urllib.request.urlopen(f"http://127.0.0.1:{port}{BASE_URL}", timeout=2)
+        return True
+    except Exception:  # noqa: BLE001 - any HTTP response or refusal
+        return False
+
+
+def wait_for_server(port: int, log_path: Path, timeout: int = 180) -> None:
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if server_up(port):
+            return
+        time.sleep(0.25)
+    tail = ""
+    if log_path.is_file():
+        lines = log_path.read_text(encoding="utf-8", errors="replace").splitlines()
+        tail = "\n".join(lines[-40:])
+    raise ValueError(f"dashboard server did not start within {timeout}s; last log lines:\n{tail}")
+
+
+def ensure_server(dashboard: Path, requested_port: int | None) -> dict:
+    state = load_state(dashboard)
+    log_path = dashboard / "dev.log"
+    if state.get("pid") and state.get("dashboard") == str(dashboard.resolve()):
+        if isinstance(state.get("pid"), int) and pid_alive(state["pid"]) and isinstance(state.get("port"), int):
+            if server_up(state["port"]):
+                return {"pid": state["pid"], "port": state["port"], "reused": True, "url": f"http://127.0.0.1:{state['port']}{BASE_URL}"}
+    port = requested_port if isinstance(requested_port, int) and requested_port > 0 else free_port()
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    log = open(log_path, "a", encoding="utf-8")
+    proc = subprocess.Popen(
+        ["npm", "--prefix", str(dashboard), "run", "dev", "--", "-H", "127.0.0.1", "-p", str(port)],
+        cwd=str(dashboard),
+        stdout=log,
+        stderr=subprocess.STDOUT,
+        env=dict(os.environ, NEXT_TELEMETRY_DISABLED="1"),
+        start_new_session=True,
+    )
+    new_state = dict(state)
+    new_state.update({
+        "schema": STATE_SCHEMA,
+        "dashboard": str(dashboard.resolve()),
+        "pid": proc.pid,
+        "port": port,
+        "url": f"http://127.0.0.1:{port}{BASE_URL}",
+        "started_at": now_iso(),
+    })
+    save_state(dashboard, new_state)
+    try:
+        wait_for_server(port, log_path)
+    except ValueError:
+        proc.terminate()
+        raise
+    return {"pid": proc.pid, "port": port, "reused": False, "url": new_state["url"]}
+
+
+def process_group_alive(pid: int) -> bool:
+    try:
+        os.waitpid(pid, os.WNOHANG)
+    except (ChildProcessError, OSError):
+        pass
+    try:
+        os.killpg(pid, 0)
+        return True
+    except PermissionError:
+        return True
+    except ProcessLookupError:
+        return False
+    except OSError:
+        return pid_alive(pid)
+
+
+def signal_process_group(pid: int, signum: int) -> bool:
+    try:
+        os.killpg(pid, signum)
+        return True
+    except (ProcessLookupError, PermissionError):
+        try:
+            os.kill(pid, signum)
+            return True
+        except OSError:
+            return False
+    except OSError:
+        return False
+
+
+def stop_server(dashboard: Path) -> dict:
+    state = load_state(dashboard)
+    pid = state.get("pid")
+    stopped = isinstance(pid, int) and pid > 0
+    forced = False
+    if stopped and process_group_alive(pid):
+        signal_process_group(pid, 15)  # SIGTERM
+        deadline = time.time() + 3
+        while process_group_alive(pid) and time.time() < deadline:
+            time.sleep(0.05)
+        if process_group_alive(pid):
+            forced = signal_process_group(pid, 9)  # SIGKILL
+    state.pop("pid", None)
+    state.pop("port", None)
+    state.pop("url", None)
+    save_state(dashboard, state)
+    return {"stopped": stopped, "forced": forced}
+
+
+def open_browser(url: str) -> None:
+    try:
+        opener = "open" if sys.platform == "darwin" else "xdg-open"
+        subprocess.run([opener, url], timeout=10, capture_output=True)
+    except Exception:  # noqa: BLE001 - browser opening must never fail the run
+        pass
+
+
+def _stage_build(dashboard: Path, repo: Path, manifest: dict, template_dir: Path, force: bool) -> dict:
+    """Scaffold (when needed), convert into staging, validate staging, then
+    swap into place. A failed conversion or validation leaves the previous
+    dashboard untouched."""
+    state = load_state(dashboard)
+    shell_sig = shell_signature(template_dir, repo, manifest)
+    scaffold_app(dashboard, template_dir, repo, manifest, force or state.get("shell_sig") != shell_sig)
+    route_plan = plan(repo, manifest)
+    if route_plan["problems"]:
+        for problem in route_plan["problems"]:
+            print(f"problem: {problem}")
+        print("route plan has errors; fix the manifest or document tree before starting")
+        raise ValueError("route plan has errors")
+    content_dir = dashboard / "content"
+    staging = content_dir / ".staging"
+    stage_docs = staging / "docs"
+    stage_assets = staging / "public" / "docs-assets"
+    if staging.exists():
+        shutil.rmtree(staging)
+    stage_docs.mkdir(parents=True, exist_ok=True)
+    try:
+        ledger = build_ledger(included_documents(repo, manifest))
+        ledger["assets"] = collect_asset_map(repo)
+        converted = convert_documents(repo, manifest, ledger, stage_docs)
+        meta = meta_plans(ledger, manifest)
+        for folder, item in meta.items():
+            meta_path = stage_docs / item["path"]
+            meta_path.parent.mkdir(parents=True, exist_ok=True)
+            meta_path.write_text(dump_json({"title": item["title"], "pages": item["pages"]}), encoding="utf-8")
+        copied = copy_assets(repo, stage_assets, converted["assets_needed"])
+        validation = validate_build(repo, manifest, stage_docs, stage_assets)
+        for warning in validation["warnings"]:
+            print(f"  warning: {warning}")
+        if not validation["ok"]:
+            for error in validation["errors"]:
+                print(f"  error: {error}")
+            raise ValueError("dashboard validation failed; previous dashboard left in place")
+        swap_stage(dashboard, stage_docs, stage_assets)
+        if staging.exists():
+            shutil.rmtree(staging)
+        return {"converted": converted["converted"], "copied": copied, "validation": validation}
+    except Exception:
+        if staging.exists():
+            shutil.rmtree(staging)
+        print("dashboard was NOT opened: the documentation failed the dashboard build; run /docforge-revise to fix it, then `dashboard start` again")
+        raise
+
+
+def _plan_only(args: argparse.Namespace, manifest: dict, render_sig: str, shell_sig: str, dashboard: Path | None = None) -> int:
+    metadata_report = reconcile_metadata(args.repo, manifest, dry_run=True)
+    route_plan = plan(args.repo, manifest)
+    scan_result = scan(args.repo, manifest, dashboard)
+    print(f"metadata (dry-run): {metadata_report['counts']['reconciled']} to reconcile, {metadata_report['counts']['unchanged']} unchanged, {metadata_report['counts']['errors']} errors")
+    for page in route_plan["pages"]:
+        print(f"  {page['doc_id']:<32} {page['source_path']:<48} -> {page['url']}")
+    print(f"{len(route_plan['pages'])} pages in {route_plan['folder_count']} folders; {len(route_plan['problems'])} problems")
+    for problem in route_plan["problems"]:
+        print(f"  problem: {problem}")
+    if scan_result["problems"]:
+        print(f"scan: {len(scan_result['problems'])} problems found:")
+        for problem in scan_result["problems"]:
+            who = f"{problem['doc']}: " if problem["doc"] else ""
+            tag = " (blocking)" if problem["blocking"] else ""
+            print(f"  [{problem['kind']}]{tag} {who}{problem['detail']}")
+    else:
+        print("scan: 0 problems")
+    print(f"render_sig: {render_sig}")
+    print(f"shell_sig: {shell_sig}")
+    ok = not route_plan["problems"] and metadata_report["counts"]["errors"] == 0 and not scan_result["blocking"]
+    return 0 if ok else 1
+
+
+def revise_advice(scan_result: dict) -> str:
+    """What to tell the user after a scan that found problems.
+
+    An agents-only repository has nothing for a browsable site to show. That is
+    a scope fact, so pointing the user at `/docforge-revise` would be wrong --
+    there is nothing to fix."""
+    if scan_result.get("no_human_docs"):
+        return NO_HUMAN_DOCS_MESSAGE
+    return "you should revise again: run /docforge-revise to fix the documentation"
+
+
+def _prepare(args: argparse.Namespace, dashboard: Path, manifest: dict, template_dir: Path, render_sig: str, shell_sig: str, force: bool) -> tuple[dict, str]:
+    """Shared `start`/`export` pipeline: scan, metadata reconcile, signature,
+    build-if-changed, install-if-missing. Returns (new_state, render_sig)."""
+    metadata_report = reconcile_metadata(args.repo, manifest)
+    print(f"metadata: {metadata_report['counts']['reconciled']} reconciled, {metadata_report['counts']['unchanged']} unchanged")
+    scan_result = scan(args.repo, manifest)
+    if scan_result["problems"]:
+        print(f"scan: {len(scan_result['problems'])} problems found:")
+        for problem in scan_result["problems"]:
+            who = f"{problem['doc']}: " if problem["doc"] else ""
+            tag = " (blocking)" if problem["blocking"] else ""
+            print(f"  [{problem['kind']}]{tag} {who}{problem['detail']}")
+        advice = revise_advice(scan_result)
+        print(advice if advice.startswith("nothing to render") else f"{advice} before relying on this dashboard")
+    else:
+        print("scan: 0 problems")
+    if scan_result["blocking"]:
+        print("dashboard was NOT opened: scan found blocking problems; run /docforge-revise to fix them, then `dashboard start` again")
+        raise ValueError("scan found blocking problems; see findings above")
+    # Reconcile rewrites frontmatter, so the render signature must be computed
+    # after it: the stored signature must describe the exact bytes a rebuild
+    # would consume.
+    render_sig = render_signature(args.repo, manifest)
+
+    state = load_state(dashboard)
+    built = (dashboard / "content" / "docs" / "index.mdx").is_file()
+    needs_render = force or state.get("render_sig") != render_sig or state.get("shell_sig") != shell_sig or not built
+    new_state = dict(state)
+    if needs_render:
+        result = _stage_build(dashboard, args.repo, manifest, template_dir, force)
+        new_state.update({
+            "schema": STATE_SCHEMA,
+            "dashboard": str(dashboard.resolve()),
+            "render_sig": render_sig,
+            "shell_sig": shell_sig,
+            "built_at": now_iso(),
+        })
+        save_state(dashboard, new_state)
+        print(f"converted {len(result['converted'])} documents; copied {len(result['copied'])} assets")
+    else:
+        print("signature unchanged: dashboard is up to date")
+
+    if not (dashboard / "node_modules").is_dir():
+        ensure_dependencies(dashboard, args.repo)
+
+    # Real Mermaid validation: needs `mermaid`/`jsdom`, which only exist once
+    # dependencies are installed (just above), so this cannot be part of the
+    # dependency-free `scan()` call earlier in this function.
+    mermaid_result = mermaid_findings(args.repo, manifest, dashboard)
+    if mermaid_result["problems"]:
+        print(f"mermaid: {len(mermaid_result['problems'])} invalid diagram(s) found:")
+        for problem in mermaid_result["problems"]:
+            print(f"  [{problem['kind']}] (blocking) {problem['doc']}: {problem['detail']}")
+    if mermaid_result["blocking"]:
+        print("dashboard was NOT opened: invalid Mermaid diagrams found; run /docforge-revise to fix them, then `dashboard start` again")
+        raise ValueError("invalid Mermaid diagrams found; see findings above")
+
+    return new_state, render_sig
+
+
+def cmd_start(args: argparse.Namespace, dashboard: Path, manifest: dict, template_dir: Path) -> int:
+    if not has_human_facing_documents(manifest):
+        print(NO_HUMAN_DOCS_MESSAGE)
+        return 0
+    render_sig = render_signature(args.repo, manifest)
+    shell_sig = shell_signature(template_dir, args.repo, manifest)
+    if args.plan_only:
+        return _plan_only(args, manifest, render_sig, shell_sig, dashboard)
+    _prepare(args, dashboard, manifest, template_dir, render_sig, shell_sig, args.force)
+
+    server = ensure_server(dashboard, args.port)
+    print(f"dashboard: {server['url']} (reused={server['reused']})")
+    if not args.no_open:
+        open_browser(server["url"])
+    print("dashboard server running in the background; stop it with `dashboard stop`")
+    return 0
+
+
+def cmd_export(args: argparse.Namespace, dashboard: Path, manifest: dict, template_dir: Path) -> int:
+    if not has_human_facing_documents(manifest):
+        print(NO_HUMAN_DOCS_MESSAGE)
+        return 0
+    render_sig = render_signature(args.repo, manifest)
+    shell_sig = shell_signature(template_dir, args.repo, manifest)
+    new_state, render_sig = _prepare(args, dashboard, manifest, template_dir, render_sig, shell_sig, False)
+
+    export_sig = export_signature(render_sig, shell_sig)
+    out_dir = dashboard / "out"
+    has_output = out_dir.is_dir() and any(out_dir.rglob("*.html"))
+    needs_export = new_state.get("export_sig") != export_sig or not has_output
+    if needs_export:
+        build_dashboard(dashboard)
+        new_state.update({
+            "schema": STATE_SCHEMA,
+            "dashboard": str(dashboard.resolve()),
+            "export_sig": export_sig,
+            "exported_at": now_iso(),
+        })
+        save_state(dashboard, new_state)
+        print(f"exported: {out_dir}")
+    else:
+        print(f"export up to date: {out_dir}")
+    return 0
+
+
+def cmd_scan(args: argparse.Namespace, manifest: dict, dashboard: Path | None = None) -> int:
+    result = scan(args.repo, manifest, dashboard)
+    if args.json:
+        print(dump_json(result))
+        return 0 if not result["problems"] else 1
+    if result["no_human_docs"]:
+        print(NO_HUMAN_DOCS_MESSAGE)
+        return 0
+    if not result["problems"]:
+        print("scan: 0 problems; the documentation is ready to render")
+    else:
+        print(f"scan: {len(result['problems'])} problems found:")
+        for problem in result["problems"]:
+            who = f"{problem['doc']}: " if problem["doc"] else ""
+            tag = " (blocking)" if problem["blocking"] else ""
+            print(f"  [{problem['kind']}]{tag} {who}{problem['detail']}")
+        advice = revise_advice(result)
+        print(advice if advice.startswith("nothing to render") else f"{advice}, then `dashboard start` again")
+    if result["unmanaged"]:
+        print(f"unmanaged: {len(result['unmanaged'])} self-managed docs (never tracked, never re-asked)")
+        for rel in result["unmanaged"]:
+            print(f"  {rel}")
+    return 1 if result["problems"] else 0
+
+
+def cmd_status(args: argparse.Namespace, dashboard: Path, manifest: dict, template_dir: Path) -> int:
+    docs = included_documents(args.repo, manifest)
+    state = load_state(dashboard)
+    render_sig = render_signature(args.repo, manifest)
+    running = False
+    if state.get("pid") and isinstance(state.get("port"), int):
+        running = pid_alive(state["pid"]) and server_up(state["port"])
+    result = {
+        "dashboard": str(dashboard),
+        "exists": dashboard.is_dir(),
+        "render_sig": {
+            "current": render_sig,
+            "stored": state.get("render_sig"),
+            "match": state.get("render_sig") == render_sig,
+        },
+        "server": {
+            "running": running,
+            "port": state.get("port") if running else None,
+            "url": state.get("url") if running else None,
+        },
+        "counts": {"included_docs": len(docs)},
+        "built_at": state.get("built_at"),
+    }
+    if args.json:
+        print(dump_json(result))
+    else:
+        print(f"dashboard: {result['dashboard']}")
+        print(f"exists: {result['exists']}  render signature match: {result['render_sig']['match']}")
+        print(f"server: {'running on ' + str(result['server']['url']) if result['server']['running'] else 'not running'}")
+        print(f"included documents: {result['counts']['included_docs']}")
+    return 0
+
+
+def cmd_stop(args: argparse.Namespace, dashboard: Path) -> int:
+    result = stop_server(dashboard)
+    print(f"stopped: {result['stopped']}")
+    return 0
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(prog="dashboard", description="Docforge dashboard: build-if-changed, serve, or export")
+    common = argparse.ArgumentParser(add_help=False)
+    common.add_argument("--repo", default=".", help="repository root (default: current directory)")
+    common.add_argument("--manifest", default=None, help="manifest path (default: <repo>/.docforge/manifest.json)")
+    common.add_argument("--dashboard", default=None, help="dashboard directory (default: <repo>/.docforge/dashboard)")
+    common.add_argument("--json", action="store_true", help="JSON output (status)")
+    sub = parser.add_subparsers(dest="command", required=True)
+    sub.add_parser("scan", parents=[common], help="read-only diagnostics: metadata, missing/incomplete docs, source drift, broken links, untracked docs/ files")
+    start = sub.add_parser("start", parents=[common], help="reconcile, rebuild when changed, serve, and open")
+    start.add_argument("--force", action="store_true", help="rebuild generated output even when the signature is unchanged")
+    start.add_argument("--plan-only", action="store_true", help="reconcile dry-run, signatures, and route plan only; no writes, no server")
+    start.add_argument("--no-open", action="store_true", help="do not open the browser after serving")
+    start.add_argument("--port", type=int, default=0, help="port (default: auto)")
+    sub.add_parser("export", parents=[common], help="reconcile, rebuild when changed, then `next build` the static HTML export into out/")
+    sub.add_parser("status", parents=[common], help="dashboard existence, render signature match, server state")
+    sub.add_parser("stop", parents=[common], help="stop the dashboard dev server")
+    return parser
+
+
+def _auto_migrate_manifest(repo: Path, manifest_path: Path) -> dict:
+    """Legacy manifest metadata migration is safe and non-destructive (bodies
+    untouched, manifest.json + frontmatter only), so `start`/`export` run it
+    automatically instead of stopping to ask — mirroring the existing bare
+    `/docforge-revise` precedent. Never silent: prints what changed."""
+    reports, _changed = migrate_manifest_metadata(repo, manifest_path, dry_run=False)
+    counts: dict[str, int] = {}
+    for item in reports:
+        counts[item["action"]] = counts.get(item["action"], 0) + 1
+    summary = ", ".join(f"{n} {action}" for action, n in sorted(counts.items()))
+    print(f"manifest: legacy manifest auto-migrated to {MANIFEST_CURRENT} ({summary})")
+    return load_manifest(manifest_path)
+
+
+def _preview_legacy_migration(repo: Path, manifest_path: Path) -> int:
+    reports, changed = migrate_manifest_metadata(repo, manifest_path, dry_run=True)
+    print("manifest is legacy; --plan-only preview (no writes):")
+    print(dump_json({"changed": changed, "results": reports}))
+    return 1 if changed else 0
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    repo = Path(args.repo).resolve()
+    manifest_path = Path(args.manifest) if args.manifest else repo / ".docforge" / "manifest.json"
+    dashboard = Path(args.dashboard).resolve() if args.dashboard else repo / ".docforge" / "dashboard"
+    args.repo = repo
+    args.manifest = manifest_path
+    args.dashboard = dashboard
+    template_dir = Path(__file__).resolve().parent.parent / "template"
+    if args.command in {"start", "export", "status", "scan"}:
+        hint = (
+            "run `dashboard start` or `dashboard export` to migrate it automatically, "
+            "or run migrate_metadata.py to re-register legacy manifests manually"
+        )
+        try:
+            manifest = load_manifest(manifest_path, unsupported_hint=hint)
+        except ValueError as exc:
+            if args.command not in {"start", "export"} or not manifest_path.is_file():
+                return fail(str(exc))
+            try:
+                if args.command == "start" and getattr(args, "plan_only", False):
+                    return _preview_legacy_migration(repo, manifest_path)
+                manifest = _auto_migrate_manifest(repo, manifest_path)
+            except ValueError as migrate_exc:
+                return fail(str(migrate_exc))
+    else:
+        manifest = {}
+    try:
+        if args.command == "scan":
+            return cmd_scan(args, manifest, dashboard)
+        if args.command == "start":
+            return cmd_start(args, dashboard, manifest, template_dir)
+        if args.command == "export":
+            return cmd_export(args, dashboard, manifest, template_dir)
+        if args.command == "status":
+            return cmd_status(args, dashboard, manifest, template_dir)
+        if args.command == "stop":
+            return cmd_stop(args, dashboard)
+    except ValueError as exc:
+        return fail(str(exc))
+    return 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

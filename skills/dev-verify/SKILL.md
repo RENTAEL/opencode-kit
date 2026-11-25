@@ -1,0 +1,150 @@
+---
+name: dev-verify
+description: "Work phase of the development workflow. Lets the user pick which verification checks run, then delegates comprehensive verification with a fix-then-reverify loop."
+---
+# Dev Verify ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â Verification & Issue Resolution (options-chosen, verification-done)
+
+Work phase of the development workflow. Lets the user pick which verification checks run, then delegates comprehensive verification with a fix-then-reverify loop.
+
+## Entry Gate
+
+Resolve the `task-path-or-identifier` argument BEFORE anything else (see [Gate Contract](../orchestrator-framework/references/gate-contract.md)):
+
+- **Path** (absolute or project-relative) to the task directory ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â use as-is.
+- **Identifier** ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â exact directory name inside `.owflow/tasks/development/` (e.g., `2026-01-12-my-task`); resolve to its path.
+- If the argument is **missing**, the path does **not exist**, or matches **no identifier** ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ print the blocked block, then STOP (never guess or auto-pick a task):
+  1. Steps that must be completed first (in order), each with its command:
+     - Codebase & gap analysis (`codebase-analysed`, `gap-analysed`) ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ `/owflow:dev-analyze <task-path>`
+     - TDD red gate (`tdd-red-proven`) ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â only when a reproducible defect was detected ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ `/owflow:dev-tdd-red <task-path>`
+     - Requirements, specification & audit (`spec-written`, `spec-audited`) ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ `/owflow:dev-spec <task-path>`
+     - Implementation planning (`plan-created`) ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ `/owflow:dev-plan <task-path>`
+     - Implementation & TDD green gate (`implementation-done`, `tdd-green-proven`) ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ `/owflow:dev-implement <task-path>`
+  2. List available dev-task identifiers (directories under `.owflow/tasks/development/`) to resume from, if any.
+  3. Hint: `Run /owflow:development <description> to start a task from scratch, or pass a task path/identifier to resume.`
+
+### Prerequisites
+
+| Required for this skill | Where verified                                   | Produced by                          |
+| ----------------------- | ------------------------------------------------ | ------------------------------------ |
+| State file exists       | `<task-path>/orchestrator-state.yml`             | `/owflow:development <desc>`         |
+| Implementation done     | `implementation-done` in `completed_phases`      | `/owflow:dev-implement <task-path>`  |
+
+**Dev-bugfix tasks are verified here too**: a task produced or resumed by `/owflow:dev-bugfix` reaches this skill with `implementation-done` complete but no spec/plan ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â that is valid; verification does NOT require them. A consecutive dev-bugfix run on a verified task resets the downstream slugs, so the user is routed here for re-verification.
+
+1. **Read `orchestrator-state.yml`** from the task path. If missing ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ mid-pipeline bootstrap ([Missing-state Bootstrap](../orchestrator-framework/references/gate-contract.md), starting slug `options-chosen`): `question` ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â create a fresh standard development task starting at this step, or decline ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ print `No development task found at <path>. Run /owflow:development <description> to start a task from scratch.` and STOP.
+2. **Prerequisite check**: `implementation-done` in `completed_phases` (implementation done). If missing ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ print the blocked block, then STOP:
+   - Steps that must be completed first: analysis (`codebase-analysed`, `gap-analysed`) ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ TDD red gate (`tdd-red-proven`, only when a reproducible defect was detected) ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ specification (`spec-written`) ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ implementation planning (`plan-created`) ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ implementation (`implementation-done`).
+   - `Run /owflow:dev-implement <task-path> first` (or the command for the earliest missing earlier step: `/owflow:dev-analyze`, `/owflow:dev-tdd-red`, `/owflow:dev-spec`, or `/owflow:dev-plan`).
+   - If no task exists yet: `Run /owflow:development <description> to start a task from scratch.`
+3. **Re-verification**: if `options-chosen` and `verification-done` are already complete and re-running after fixes, confirm scope via `question` (full re-run vs only failed checks).
+
+## Execute
+
+**Read first**: the [Delegation Rules](../orchestrator-framework/references/delegation-rules.md), the [Fix Loop Contract](../orchestrator-framework/references/fix-loop-contract.md), and [Issue Resolution](../orchestrator-framework/references/orchestrator-patterns.md) (Section 6).
+
+### Verification Options Prompt (`options-chosen`, inline)
+
+**Step 1**: Display the verification plan:
+
+```
+Verification Plan:
+  Obligatory (always run):
+    ÃƒÂ¢Ã…â€œÃ¢â‚¬Å“ Completeness check
+    ÃƒÂ¢Ã…â€œÃ¢â‚¬Å“ Test suite (skipped ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â passed during implementation; re-enabled after fixes)
+
+  Recommended (adjustable):
+    ÃƒÂ¢Ã…â€œÃ¢â‚¬Å“ Code review ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â quality and security analysis
+    ÃƒÂ¢Ã…â€œÃ¢â‚¬Å“ Pragmatic review ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â detects over-engineering
+    ÃƒÂ¢Ã…â€œÃ¢â‚¬Å“ Reality check ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â validates work solves the problem
+    ÃƒÂ¢Ã…â€œÃ¢â‚¬Å“ Production readiness ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â deployment readiness checks
+
+  Conditional:
+    [ÃƒÂ¢Ã…â€œÃ¢â‚¬Å“/ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â] E2E browser testing ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â [reason]
+    [ÃƒÂ¢Ã…â€œÃ¢â‚¬Å“/ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â] User documentation ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â [reason]
+```
+
+**Step 2** (3 questions):
+
+- **Q1** (always): `question` (multi-select) ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â "Which standard verifications to run?" Options: "Code review (Recommended)", "Pragmatic review (Recommended)", "Reality check (Recommended)", "Production readiness (Recommended)". All pre-selected.
+- **Q2** (skip if `options.e2e_enabled: false` and no `--e2e` flag): "Enable E2E browser verification?" ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â "Yes (Recommended)" / "No, skip".
+- **Q3** (skip if `options.user_docs_enabled: false` and no `--user-docs` flag): "Generate user documentation?" ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â "Yes (Recommended)" / "No, skip".
+
+Set all chosen `options.*` in state. **Auto-set** `skip_test_suite: true` (full suite passed during implementation; cleared before re-verification if fixes are applied).
+
+**State write**: append `options-chosen` to `completed_phases`; write chosen `options.*` and `skip_test_suite`; bump `orchestrator.updated`; re-read + `verify_template` (see State Update Convention).
+
+### Verification & Issue Resolution (`verification-done`)
+
+**Step 1**: Skill tool - `implementation-verifier`. Pass: task_path, task_description, chosen verification options, `verification_context` if re-verifying.
+
+**Step 2**: Display detailed issue breakdown grouped by category and severity:
+
+```
+Verification Results:
+  Critical ([N]):
+    - [category]: [description] ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â [file:line] [fixable/manual]
+  Warning ([N]):
+    - [category]: [description] ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â [file:line] [fixable/manual]
+  Info ([N]):
+    - [description] (listed for awareness, not actionable)
+```
+
+**Step 3**: Gate on status ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â `passed` ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ skip to State Update. `passed_with_issues` or `failed` ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ fix loop (Step 4).
+
+**Step 4**: User-driven fix loop (max 3 iterations) ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â follow the [Fix Loop Contract](../orchestrator-framework/references/fix-loop-contract.md): the three-option question wording, immediate `fixes_applied` writes, `skip_test_suite: false` after fixes, re-invoking `implementation-verifier` on request, and refreshing `reverify_count` / `last_status` / `issues_found` right after each verifier run.
+
+**Exit conditions**: no critical issues remain ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ proceed; user explicitly chooses to proceed with issues ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ proceed with issues logged; max 3 iterations ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ `question` "Proceed with known issues?" / "Stop workflow". **MUST NOT proceed with unresolved critical issues unless the user explicitly approves.**
+
+## State Update Convention (per step)
+
+Apply after EVERY phase/step above:
+
+1. **Write immediately** ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â update `orchestrator-state.yml` as soon as the step completes, appending ONLY the step slug actually performed plus that step's fields. Never defer writes to the end of the skill.
+2. **Options prompt** ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â append `options-chosen` to `completed_phases` with the chosen `options.*` and `skip_test_suite` (written right after the options prompt, before verification starts).
+3. **Per verifier run** ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â update `verification_context.last_status`, `issues_found`, `fixes_applied`, and `reverify_count` immediately after each `implementation-verifier` run and after each fix-loop iteration (per the [Fix Loop Contract](../orchestrator-framework/references/fix-loop-contract.md)'s immediate-write cadence), so an interruption loses nothing.
+4. **Completion** ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â append `verification-done` to `completed_phases` only at skill exit: status `passed`, or user-approved proceed with issues logged. Bump `orchestrator.updated` on every write.
+5. **Failures** ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â if `implementation-verifier` itself fails or the workflow stops with unresolved critical issues, do NOT append `verification-done` to `completed_phases`; append it to `orchestrator.failed_phases` and increment `auto_fix_attempts["verification-done"]`.
+6. **Validate** ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â after every write, re-read the file to confirm values, then run the `verify_template` tool with `filePath: <task-path>/orchestrator-state.yml`, `templateName: orchestrator-state-development.yml`. Fix any reported issue immediately before proceeding.
+7. **Final check** ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â before the Exit Gate, one consolidated re-read + `verify_template` run to confirm the full state matches everything performed in this session.
+
+## Exit Gate
+
+Present results, get user confirmation, then hand off (see [Gate Contract](../orchestrator-framework/references/gate-contract.md)). Never auto-invoke the next skill.
+
+### Results box
+
+```markdown
+## ÃƒÂ¢Ã…â€œÃ¢â‚¬Â¦ DEV VERIFY COMPLETE ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â <task name>
+
+**Overall status** ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â [ÃƒÂ¢Ã…â€œÃ¢â‚¬Â¦ passed / ÃƒÂ¢Ã…Â¡Ã‚Â  passed_with_issues / ÃƒÂ¢Ã‚ÂÃ…â€™ failed]
+**Issues found** ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â [total] ([critical] C / [warning] W / [info] I)
+**Fixed** ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â [count]
+**Remaining** ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â [by severity]
+
+**Artifacts**
+- `verification/implementation-verification.md`
+- `verification/code-review-report.md` [if run]
+- `verification/pragmatic-review.md` [if run]
+- `verification/reality-check.md` [if run]
+- `verification/production-readiness-report.md` [if run]
+```
+
+### Results-acceptance question
+
+Use `question` ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â "Are these results correct?" with options:
+
+- **Accept** ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â verification outcome is good (including approved proceed-with-issues); continue.
+- **Adjust** ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â run additional fixes and/or another verification round (within the fix-loop limits), then re-present the results box.
+- **Discuss** ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â walk through specific findings (issue details, fixability assessment, recommendations) in more depth; then re-ask.
+- **Stop here** ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â print the resume command (`/owflow:dev-verify <task-path>`) and end.
+
+### Next steps (after Accept)
+
+- `ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ /owflow:dev-finalize <task-path>` ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â `required` to close the workflow: conditional E2E verification, optional user documentation, and commit guidance (whether E2E/docs run is decided inside based on task characteristics). Remaining after: none ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â workflow ends.
+
+**Other options**:
+
+- `/owflow:reviews-code <task-path>` / `/owflow:reviews-pragmatic <task-path>` ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â `optional` ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â standalone re-runs of individual reviews; do not advance phases
+- `/owflow:goal-development <task-path>` ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â `optional` shortcut: finishes the remaining phases in one loop (finalize)
+
+Then STOP.

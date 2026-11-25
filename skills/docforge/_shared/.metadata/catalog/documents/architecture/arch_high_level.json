@@ -1,0 +1,54 @@
+{
+  "id": "arch_high_level",
+  "type": "architecture-high-level",
+  "summary": "Context, deployable or provisioned blocks labeled with implementing technology (e.g. 'React SPA', 'PostgreSQL 15', or for `infrastructure-platform`...",
+  "contract_file": "content/architecture/contracts/architecture-high-level.md",
+  "path": "docs/architecture/high-level.md",
+  "group": "architecture",
+  "selection": {
+    "mode": "static",
+    "min_tier": "spine",
+    "selectors": {},
+    "condition": null
+  },
+  "instruction_file": "content/architecture/instructions.md",
+  "requires": [
+    "code_graph"
+  ],
+  "target_depth": "working",
+  "answer_shape": "answer-first",
+  "write_order": 10,
+  "nav_order": 21,
+  "provenance_mode": "sections",
+  "audit_profile": "architecture",
+  "dominant_form": "flowchart",
+  "model_depth": {
+    "c4": "container",
+    "arc42": "building-block-l1",
+    "mermaid": "complementary"
+  },
+  "contract_revision": "3.1.0",
+  "template_file": "content/architecture/templates/architecture-high-level.md",
+  "compact_group": "architecture_compact",
+  "compact_order": 2,
+  "illustration_views": [
+    {
+      "form": "flowchart",
+      "section": "System in context",
+      "question": "which actors and systems border this one, and what crosses each boundary"
+    },
+    {
+      "form": "flowchart",
+      "section": "Containers and blackboxes",
+      "question": "which deployable blocks run inside, and how do they communicate",
+      "depth": "working"
+    },
+    {
+      "form": "flowchart",
+      "section": "Deployment",
+      "question": "how do running software instances map onto nodes, processes, devices, environments, or containers",
+      "depth": "working",
+      "required": false
+    }
+  ]
+}

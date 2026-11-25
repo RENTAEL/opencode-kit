@@ -1,0 +1,26 @@
+{
+  "id": "portfolio_system_context",
+  "type": "system-context",
+  "summary": "Repository/system boundaries, shared services, cross-repo flows, directed dependency edges between members with coupling type and resolution confidence",
+  "contract_file": "content/portfolio/contracts/system-context.md",
+  "path": "docs-portfolio/system-context.md",
+  "group": "portfolio",
+  "selection": {
+    "mode": "static",
+    "min_tier": "portfolio",
+    "selectors": {},
+    "condition": null
+  },
+  "instruction_file": "content/portfolio/instructions.md",
+  "requires": [
+    "manifests"
+  ],
+  "target_depth": "deep-dive",
+  "answer_shape": "answer-first",
+  "write_order": 102,
+  "provenance_mode": "sections",
+  "audit_profile": "portfolio",
+  "dominant_form": "flowchart",
+  "contract_revision": "3.0.0",
+  "template_file": "content/portfolio/templates/system-context.md"
+}

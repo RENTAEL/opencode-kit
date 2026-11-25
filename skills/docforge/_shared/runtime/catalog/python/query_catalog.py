@@ -1,0 +1,1187 @@
+#!/usr/bin/env python3
+"""Query the split Docforge catalog. Agents and scripts use this — not raw files."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import re
+import sys
+from pathlib import Path
+
+from runtime.common.python._util import dump_json, fail
+
+SKILL_ROOT = Path(__file__).resolve().parent.parent.parent.parent
+CATALOG_DIR = SKILL_ROOT / ".metadata" / "catalog"
+# Depth brakes for a compact merge. The *core* cap is an authoring rule the
+# catalog can check: a group may declare at most this many tier-driven members
+# (no selectors, no condition). Beyond it the group is too broad for one file
+# and the fix is a second group with its own `compact_target`, not a bigger cap.
+COMPACT_CORE_CAP = 8
+# The *section* cap bounds the file a project actually materializes. Profile-
+# and audience-driven members are evidence-gated, so how many a group carries
+# is not knowable from the catalog; `manage_manifest.fold_compact_groups`
+# enforces this one at plan time and spills the overflow to standard paths.
+COMPACT_SECTION_CAP = 14
+# Instances of a dynamic collection (flows, decisions, concepts, runbooks) that
+# get a full `##` section in the merged file. The rest stay rows in the file's
+# candidate matrix — the same main/deferred split the flow index already uses.
+COMPACT_DYNAMIC_CAP = 6
+INDEX_PATH = CATALOG_DIR / "index.json"
+TYPES_DIR = CATALOG_DIR / "types"
+PROFILES_DIR = CATALOG_DIR / "profiles"
+# `timeline`, `mindmap`, `sankey`, `treemap`, and `C4` are documented by Mermaid
+# as experimental ("the syntax and properties can change in future releases"),
+# and `architecture-beta` / `block-beta` still require a `-beta` keyword. A
+# diagram that stops rendering on a dependency bump is worse than the prose it
+# replaced, so none of them is declarable.
+ALLOWED_DOMINANT_FORMS = {
+    None,
+    "table",
+    "text",
+    "flowchart",
+    "sequenceDiagram",
+    "erDiagram",
+    "stateDiagram-v2",
+    "journey",
+}
+# A declared view is always a real illustration, so `table` is not a view form.
+ALLOWED_VIEW_FORMS = ALLOWED_DOMINANT_FORMS - {None, "table"}
+VIEW_DEPTHS = {"orientation", "working", "deep-dive", "reference", "router"}
+TARGET_DEPTHS = {"orientation", "working", "deep-dive", "reference", "router"}
+# The closed shape vocabulary (see references/document-shapes.md). `null` is
+# permitted only for the one non-Markdown template output (claude-settings.json).
+ALLOWED_ANSWER_SHAPES = {
+    None,
+    "answer-first",
+    "ordered-narrative",
+    "executable-procedure",
+    "diagnostic-path",
+    "lookup",
+    "entry-catalog",
+    "coverage-matrix",
+    "router",
+    "merged-section-spine",
+    "fixed-frame",
+}
+# A router-depth document routes; it never also carries the answer itself.
+ROUTER_SHAPES = {"router", "entry-catalog"}
+MODEL_DEPTHS = {
+    "c4": ("context", "container", "component", "component-evidence"),
+    "arc42": ("context", "building-block-l1", "building-block-l2", "runtime-scenarios"),
+    "stride": ("boundary-element", "full-element", "interaction-risk"),
+    "adr": ("nygard", "madr-min", "madr-full"),
+    "prov": ("core", "expanded", "qualified"),
+    "mermaid": ("single-form", "complementary", "annotated"),
+}
+MODEL_DEPTH_ORDER = ("c4", "arc42", "stride", "adr", "prov", "mermaid")
+CONTRACT_REVISION_RE = re.compile(r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$")
+PROFILE_DIMENSIONS = ["shapes", "platforms", "frameworks", "concerns", "audiences", "vendors"]
+REQUIRED_DOC_FIELDS = {
+    "id",
+    "type",
+    "path",
+    "group",
+    "selection",
+    "summary",
+    "contract_file",
+    "template_file",
+    "requires",
+    "target_depth",
+    "answer_shape",
+    "write_order",
+    "provenance_mode",
+    "audit_profile",
+}
+CATALOG_VERSION = "2.28.0"
+PRESENTATION_VALUES = {
+    "code": {"contract-only", "task-focused"},
+    "related_docs": {"none", "compact", "traceability"},
+    "repository_paths": {"hidden", "actionable-only"},
+}
+
+
+def load_index() -> dict:
+    if not INDEX_PATH.is_file():
+        raise ValueError(f"catalog index not found: {INDEX_PATH}")
+    return json.loads(INDEX_PATH.read_text(encoding="utf-8"))
+
+
+def load_profile(dimension: str) -> list:
+    # Accept singular aliases from CLI: shape → shapes
+    aliases = {
+        "shape": "shapes",
+        "platform": "platforms",
+        "framework": "frameworks",
+        "concern": "concerns",
+        "audience": "audiences",
+    }
+    dimension = aliases.get(dimension, dimension)
+    if dimension not in PROFILE_DIMENSIONS:
+        raise ValueError(
+            f"unknown profile dimension: {dimension}; "
+            f"expected one of: {', '.join(PROFILE_DIMENSIONS)}"
+        )
+    path = PROFILES_DIR / f"{dimension}.json"
+    if not path.is_file():
+        raise ValueError(f"profile file not found: {path}")
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def load_profiles() -> dict[str, list]:
+    return {dimension: load_profile(dimension) for dimension in PROFILE_DIMENSIONS}
+
+
+def index_row(doc_id: str) -> dict:
+    index = load_index()
+    row = next((r for r in index["document_types"] if r["id"] == doc_id), None)
+    if row is None:
+        raise ValueError(f"unknown document type id: {doc_id}")
+    return row
+
+
+def resolve_catalog_id(value: str) -> str:
+    """Resolve a catalog id, or the unique dynamic type used by an instance."""
+    index = load_index()
+    if any(row["id"] == value for row in index["document_types"]):
+        return value
+    matches = [
+        row["id"] for row in index["document_types"]
+        if load_type(row["id"]).get("selection", {}).get("mode") == "dynamic"
+        and load_type(row["id"]).get("type") == value
+    ]
+    if len(matches) == 1:
+        return matches[0]
+    raise ValueError(f"unknown document type id or dynamic type: {value}")
+
+
+def load_type(doc_id: str) -> dict:
+    row = index_row(doc_id)
+    record = row.get("record", f"types/{doc_id}.json")
+    path = CATALOG_DIR / record
+    if not path.is_file():
+        raise ValueError(f"unknown document type id: {doc_id}")
+    detail = json.loads(path.read_text(encoding="utf-8"))
+    return detail
+
+
+def load_types(doc_ids: list[str]) -> list[dict]:
+    return [load_type(doc_id) for doc_id in doc_ids]
+
+
+def load_all_types() -> list[dict]:
+    index = load_index()
+    return [load_type(row["id"]) for row in index["document_types"]]
+
+
+def as_legacy_catalog() -> dict:
+    """Reconstruct the pre-split monolith shape for callers that need the full graph."""
+    index = load_index()
+    tiers = index["tiers"]
+    if isinstance(tiers, dict):
+        tier_list = [{"id": tid, "order": meta["order"]} for tid, meta in tiers.items()]
+    else:
+        tier_list = list(tiers)
+    return {
+        "$schema": "catalog-schema.json",
+        "version": index["version"],
+        "tiers": tier_list,
+        "profiles": load_profiles(),
+        "groups": index.get("groups", []),
+        "capabilities": index.get("capabilities", []),
+        "documents": [_legacy_document_view(detail) for detail in load_all_types()],
+        "cue_hints": index.get("cue_hints", []),
+    }
+
+
+def tier_rows(tier: str) -> list[dict]:
+    index = load_index()
+    tiers = index["tiers"]
+    if isinstance(tiers, dict):
+        if tier not in tiers:
+            raise ValueError(f"unknown tier: {tier}")
+    else:
+        if tier not in {item["id"] for item in tiers}:
+            raise ValueError(f"unknown tier: {tier}")
+    return [_legacy_index_row(row) for row in index["document_types"] if row["tier"] == tier]
+
+
+# Every catalog document is materialized through the same per-document
+# writing procedure, regardless of group.
+ROUTE_WORKFLOW = "workflows/writing.md"
+GROUP_SUMMARIES = {
+    "root": "Root-level entrypoints: repository README, changelog, and the docs index.",
+    "product": "Product surface: overview, quickstart, and audience-specific product views.",
+    "architecture": "System architecture: structure, boundaries, and integration surfaces.",
+    "flows": "End-to-end flow documentation derived from the flow index.",
+    "engineering": "Engineering practices: conventions, testing, and tech debt.",
+    "operations": "Deployment, observability, and operational runbooks.",
+    "reference": "Reference lookups: APIs, configuration, and glossary.",
+    "security": "Security posture, permissions, and threat model.",
+    "contributing": "Contribution guidelines and root-level contributor docs.",
+    "records": "Architecture decision records.",
+    "portfolio": "Cross-repository portfolio layer for multi-repo diligence.",
+    "agent-context": "Agent-facing context: AGENTS.md and coding-agent views.",
+}
+# Spoken names for a group, so `--group` and `/docforge-revise <area>` accept
+# what a person would actually type. `flow`/`flows` is deliberately absent:
+# it is a reserved revise keyword for the full harvest pipeline, which is
+# strictly more than revising the `flows` group.
+GROUP_ALIASES = {
+    "readme": "root", "root-files": "root",
+    "overview": "product",
+    "arch": "architecture",
+    "eng": "engineering",
+    "ops": "operations", "runbooks": "operations",
+    "ref": "reference", "api": "reference",
+    "sec": "security",
+    "contrib": "contributing",
+    "decisions": "records", "adr": "records", "adrs": "records",
+    "agents": "agent-context", "agent": "agent-context",
+    "coding-agents": "agent-context", "ai": "agent-context",
+}
+
+
+def category(group: str) -> dict:
+    index = load_index()
+    if group not in set(index.get("groups", [])):
+        raise ValueError(f"unknown group: {group}")
+    matches = []
+    for row in index["document_types"]:
+        detail = load_type(row["id"])
+        if detail.get("group") != group:
+            continue
+        record = row.get("record", f"types/{row['id']}.json")
+        matches.append((detail.get("write_order", 0), detail["id"], detail, record))
+    matches.sort(key=lambda item: (item[0], item[1]))
+    return {
+        "category": group,
+        "summary": GROUP_SUMMARIES.get(group, f"{group} document definitions"),
+        "index": ".metadata/catalog/index.json",
+        "documents": [
+            {
+                "id": doc_id,
+                "summary": detail.get("summary"),
+                "record": f".metadata/catalog/{record}",
+            }
+            for _, doc_id, detail, record in matches
+        ],
+    }
+
+
+def _ordered_audiences(values: list[str]) -> list[str]:
+    profiles = load_profiles()
+    canonical = _normalize_profile_ids("audiences", values, profiles)
+    order = {item["id"]: item["order"] for item in profiles["audiences"]}
+    return sorted(canonical, key=lambda item: (order[item], item))
+
+
+def resolve_presentation(detail: dict, audiences: list[str] | None = None) -> tuple[str, dict, dict]:
+    """Resolve the reader-facing policy without changing legacy catalog views."""
+    index = load_index()
+    defaults = index["presentation_defaults"]
+    selected = _ordered_audiences(audiences or [])
+    override = detail.get("presentation", {})
+    selector_audiences = detail.get("selection", {}).get("selectors", {}).get("audiences", [])
+    selected_for_document = [audience for audience in selected if audience in selector_audiences]
+    if override.get("primary_audience"):
+        primary = override["primary_audience"]
+        primary_origin = "record"
+    elif selected_for_document:
+        primary = selected_for_document[0]
+        primary_origin = "selector"
+    elif selector_audiences:
+        primary = _ordered_audiences(selector_audiences)[0]
+        primary_origin = "selector"
+    else:
+        primary = defaults["primary_audience_by_group"].get(detail["group"], "engineers")
+        primary_origin = "group"
+
+    audience_defaults = defaults["by_audience"][primary]
+    presentation = {
+        "code": audience_defaults["code"],
+        "related_docs": audience_defaults["related_docs"],
+        "repository_paths": audience_defaults["repository_paths"],
+        "source_evidence": defaults["source_evidence"],
+    }
+    origins = {
+        "primary_audience": primary_origin,
+        "code": f"audience:{primary}",
+        "related_docs": f"audience:{primary}",
+        "repository_paths": f"audience:{primary}",
+        "source_evidence": "catalog",
+    }
+    for field in PRESENTATION_VALUES:
+        if field in override:
+            presentation[field] = override[field]
+            origins[field] = "record"
+    return primary, presentation, origins
+
+
+def is_core_member(detail: dict) -> bool:
+    """True when a catalog record is a *core* compact member: selected by tier
+    alone, with no profile selector and no evidence condition. Only core
+    members count against `COMPACT_CORE_CAP`, because only they are knowable
+    from the catalog — everything else depends on the project's confirmed
+    profiles and discovered evidence."""
+    rule = detail.get("selection", {})
+    return not any((rule.get("selectors") or {}).values()) and not rule.get("condition")
+
+
+def member_type_id(member) -> str:
+    """The catalog id behind a `compact_members` entry. A static member is the
+    id itself; a folded dynamic instance is `{id, slug, title}`, where `id` is
+    the dynamic *type* whose contract and template the section is written
+    from."""
+    return member["id"] if isinstance(member, dict) else member
+
+
+def manifest_compact_members(repo: Path | None, doc_id: str) -> list | None:
+    """The manifest's own folded `compact_members` for `doc_id`, or None when
+    no manifest is available or the entry has none. Entries are catalog id
+    strings, or `{id, slug, title}` objects for folded dynamic instances.
+
+    A compact group spanning tiers (e.g. `architecture_compact` at Spine and
+    Diligence) declares its *full* member roster in the catalog, but only a
+    tier-appropriate subset is ever actually selected and folded for one
+    project. The manifest entry — built by `fold_compact_groups` from the
+    tier-filtered selection — already carries the correct subset; prefer it
+    over the catalog's full list whenever a manifest is available."""
+    if repo is None:
+        return None
+    manifest_path = repo / ".docforge" / "manifest.json"
+    if not manifest_path.is_file():
+        return None
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    for doc in manifest.get("documents", []):
+        if doc.get("id") == doc_id:
+            members = doc.get("compact_members")
+            return members if isinstance(members, list) and members else None
+    return None
+
+
+ATX_HEADING = re.compile(r"^(#{1,5})(\s+\S)", re.MULTILINE)
+
+
+def _demote_member_contract(text: str) -> str:
+    """A member contract is a standalone document: one `#` title, then its own
+    `##` sections. Nested under the composed file's `## <member id>` those
+    sections become siblings of the heading that names them, so eight members
+    render as twenty-four same-named `##` blocks. Drop the title — the
+    injected heading already names the member — and demote the rest one
+    level, so the composed contract is a real two-level outline."""
+    lines = text.lstrip().splitlines()
+    if lines and lines[0].startswith("# "):
+        lines = lines[1:]
+    return ATX_HEADING.sub(lambda m: "#" + m.group(1) + m.group(2), "\n".join(lines).strip())
+
+
+def composed_compact_contract(
+    detail: dict,
+    repo: Path | None = None,
+) -> tuple[str, list[dict]]:
+    """Compose the merged file's content contract at route time: the group's
+    short header contract plus each member's existing contract as a named
+    section, in `compact_members` order. Member contracts are reused, never
+    rewritten. `repo`, when given, narrows a tier-spanning group's full
+    catalog roster to what this project's manifest actually folded — see
+    `manifest_compact_members`."""
+    parts: list[str] = []
+    members: list[dict] = []
+    header = detail.get("contract_file")
+    if header and (SKILL_ROOT / header).is_file():
+        parts.append((SKILL_ROOT / header).read_text(encoding="utf-8").rstrip())
+    entries = manifest_compact_members(repo, detail.get("id")) or detail.get("compact_members", [])
+    seen_members: set[str] = set()
+    for order, entry in enumerate(entries, start=1):
+        member_id = member_type_id(entry)
+        member = load_type(member_id)
+        member_contract = member.get("contract_file")
+        row = {
+            "id": member_id,
+            "order": order,
+            "contract": member_contract,
+            "instruction": member.get("instruction_file"),
+            "template": member.get("template_file"),
+            "requires": member.get("requires", []),
+            "target_depth": member.get("target_depth"),
+            "answer_shape": member.get("answer_shape"),
+            "model_depth": member.get("model_depth", {}),
+            "dominant_form": member.get("dominant_form"),
+            "illustration_views": member.get("illustration_views", []),
+        }
+        if isinstance(entry, dict):
+            row["slug"] = entry.get("slug")
+            row["title"] = entry.get("title")
+        members.append(row)
+        # Every folded instance of one dynamic type is the same member id, so
+        # emit that type's contract once rather than once per section. Distinct
+        # static members that happen to share an aliased contract file still
+        # each get their own `## <member id>` block.
+        if member_contract and member_id not in seen_members and (SKILL_ROOT / member_contract).is_file():
+            seen_members.add(member_id)
+            text = _demote_member_contract((SKILL_ROOT / member_contract).read_text(encoding="utf-8"))
+            parts.append(f"## {member_id}\n\n{text}")
+    return "\n\n".join(parts), members
+
+
+def route(
+    value: str,
+    audiences: list[str] | None = None,
+    repo: Path | None = None,
+) -> dict:
+    """Resolve one document's canonical writing card."""
+    doc_id = resolve_catalog_id(value)
+    row = index_row(doc_id)
+    detail = load_type(doc_id)
+    record = row.get("record", f"types/{doc_id}.json")
+    model_depth = {
+        model: detail["model_depth"][model]
+        for model in MODEL_DEPTH_ORDER
+        if model in detail.get("model_depth", {})
+    }
+    primary_audience, presentation, presentation_origin = resolve_presentation(detail, audiences)
+    compact_members = detail.get("compact_members")
+    result = {
+        "id": doc_id,
+        "group": detail.get("group"),
+        "summary": detail.get("summary"),
+        "definition": f".metadata/catalog/{record}",
+        "contract": detail.get("contract_file"),
+        "instruction": detail.get("instruction_file"),
+        "template": detail.get("template_file"),
+        "workflow": ROUTE_WORKFLOW,
+        "requires": detail.get("requires", []),
+        "target_depth": detail.get("target_depth"),
+        "answer_shape": detail.get("answer_shape"),
+        "audit_profile": detail.get("audit_profile"),
+        "dominant_form": detail.get("dominant_form"),
+        "illustration_views": detail.get("illustration_views", []),
+        "contract_revision": detail.get("contract_revision"),
+        "requires_analysis": bool(detail.get("requires_analysis", False)),
+        "model_depth": model_depth,
+        "primary_audience": primary_audience,
+        "presentation": presentation,
+        "presentation_origin": presentation_origin,
+    }
+    if compact_members:
+        composed, members = composed_compact_contract(detail, repo)
+        result["contract"] = composed
+        result["compact"] = {
+            "header_contract": detail.get("contract_file"),
+            "members": members,
+        }
+    return result
+
+
+# Field order and shape of a pre-2.5 type-detail record. --id/--ids/--tier/
+# --legacy must keep emitting exactly this shape; summary/contract_file/
+# template_file are 2.5 additions that must not leak into those modes.
+LEGACY_DOC_FIELD_ORDER = [
+    "id", "type", "path", "group", "selection", "scaffold_template",
+    "instruction_file", "requires", "target_depth", "write_order",
+    "provenance_mode", "audit_profile", "dominant_form", "schema_min",
+]
+
+
+def _legacy_document_view(detail: dict) -> dict:
+    view: dict = {}
+    for key in LEGACY_DOC_FIELD_ORDER:
+        if key == "scaffold_template":
+            template_file = detail.get("template_file")
+            if template_file:
+                view[key] = template_file.rsplit("/", 1)[-1]
+            elif "scaffold_template" in detail:
+                view[key] = detail["scaffold_template"]
+        elif key == "instruction_file":
+            instruction_file = detail.get("instruction_file")
+            view[key] = instruction_file.rsplit("/", 1)[-1] if instruction_file else None
+        elif key in detail:
+            view[key] = detail[key]
+    return view
+
+
+def _legacy_index_row(row: dict) -> dict:
+    return {"id": row["id"], "tier": row["tier"], "path": row["path"]}
+
+
+def merged_record(doc_id: str) -> dict:
+    index = load_index()
+    row = next((r for r in index["document_types"] if r["id"] == doc_id), None)
+    if row is None:
+        raise ValueError(f"unknown document type id: {doc_id}")
+    detail = load_type(doc_id)
+    view = _legacy_document_view(detail)
+    return {**view, "tier": row["tier"], "index_path": row["path"]}
+
+
+def _normalize_profile_ids(
+    dimension: str,
+    values: list[str],
+    profiles: dict[str, list],
+) -> list[str]:
+    aliases: dict[str, str] = {}
+    for definition in profiles[dimension]:
+        aliases[definition["id"]] = definition["id"]
+        for alias in definition.get("aliases", []):
+            aliases[alias] = definition["id"]
+    resolved = []
+    for value in values:
+        if value not in aliases:
+            raise ValueError(f"unknown {dimension[:-1]}: {value}")
+        canonical = aliases[value]
+        if canonical not in resolved:
+            resolved.append(canonical)
+    return resolved
+
+
+def normalize_groups(values: list[str] | None) -> list[str]:
+    """Canonical group ids for user-supplied names, aliases accepted.
+
+    An empty or absent list means "every group" -- the filter is subtractive
+    and is applied after tier/selector/condition selection, so omitting it
+    reproduces the unscoped selection exactly."""
+    if not values:
+        return []
+    known = set(load_index().get("groups", []))
+    resolved: list[str] = []
+    for value in values:
+        canonical = GROUP_ALIASES.get(value, value)
+        if canonical not in known:
+            raise ValueError(
+                f"unknown group: {value} (choose from {', '.join(sorted(known))})"
+            )
+        if canonical not in resolved:
+            resolved.append(canonical)
+    return resolved
+
+
+def groups() -> list[dict]:
+    """Every catalog group with the audiences that unlock it.
+
+    A group whose every document is audience-gated selects nothing on its own;
+    `audiences` is what intake pre-checks and what the empty-selection guard
+    names when a scope would produce no documents."""
+    index = load_index()
+    rows = []
+    for group in index.get("groups", []):
+        unlocking: list[str] = []
+        for row in index["document_types"]:
+            detail = load_type(row["id"])
+            if detail.get("group") != group:
+                continue
+            for audience in detail["selection"].get("selectors", {}).get("audiences", []):
+                if audience not in unlocking:
+                    unlocking.append(audience)
+        rows.append({
+            "id": group,
+            "summary": GROUP_SUMMARIES.get(group, ""),
+            "aliases": sorted(name for name, target in GROUP_ALIASES.items() if target == group),
+            "audiences": unlocking,
+        })
+    return rows
+
+
+def group_audiences(group: str) -> list[str]:
+    """Audiences that unlock any document in `group`; empty when ungated."""
+    canonical = normalize_groups([group])[0]
+    return next(row["audiences"] for row in groups() if row["id"] == canonical)
+
+
+def applicable(
+    *,
+    shape: list[str] | None = None,
+    platform: list[str] | None = None,
+    framework: list[str] | None = None,
+    concern: list[str] | None = None,
+    audience: list[str] | None = None,
+    tier: str | None = None,
+    group: list[str] | None = None,
+    include_dynamic: bool = False,
+) -> list[str]:
+    """Return document-type ids applicable for the given profile/tier selection."""
+    index = load_index()
+    profiles = load_profiles()
+    scoped_groups = set(normalize_groups(group))
+    selected = {
+        "shapes": _normalize_profile_ids("shapes", shape or [], profiles),
+        "platforms": _normalize_profile_ids("platforms", platform or [], profiles),
+        "frameworks": _normalize_profile_ids("frameworks", framework or [], profiles),
+        "concerns": _normalize_profile_ids("concerns", concern or [], profiles),
+        "audiences": _normalize_profile_ids("audiences", audience or [], profiles),
+    }
+    tiers = index["tiers"]
+    if isinstance(tiers, dict):
+        ranks = {tid: meta["order"] for tid, meta in tiers.items()}
+    else:
+        ranks = {item["id"]: item["order"] for item in tiers}
+    if tier is None:
+        tier = "diligence"
+    if tier not in ranks:
+        raise ValueError(f"unknown tier: {tier}")
+    tier_rank = ranks[tier]
+
+    ids: list[str] = []
+    for row in index["document_types"]:
+        detail = load_type(row["id"])
+        rule = detail["selection"]
+        if rule["mode"] in {"dynamic", "compact"} and not include_dynamic:
+            continue
+        if scoped_groups and detail.get("group") not in scoped_groups:
+            continue
+        if ranks[rule["min_tier"]] > tier_rank:
+            continue
+        selectors = rule.get("selectors", {})
+        has_selectors = any(selectors.values())
+        if has_selectors:
+            matched = False
+            for dimension, values in selectors.items():
+                if dimension == "frameworks":
+                    continue  # frameworks must not select documents
+                selected_values = selected.get(dimension, [])
+                if any(value in selected_values for value in values):
+                    matched = True
+                    break
+            if not matched:
+                continue
+        ids.append(detail["id"])
+    return ids
+
+
+def validate() -> list[str]:
+    errors: list[str] = []
+    try:
+        index = load_index()
+    except ValueError as exc:
+        return [str(exc)]
+    if index.get("version") != CATALOG_VERSION:
+        errors.append(f"catalog version must be {CATALOG_VERSION}, got {index.get('version')}")
+    for key in ("tiers", "groups", "capabilities", "profiles", "presentation_defaults", "document_types"):
+        if key not in index:
+            errors.append(f"index.json missing {key}")
+    tiers = index.get("tiers", {})
+    if isinstance(tiers, dict):
+        tier_ids = set(tiers)
+    else:
+        tier_ids = {item["id"] for item in tiers}
+
+    profiles: dict[str, list] = {}
+    profile_ids: dict[str, set[str]] = {}
+    for dimension in PROFILE_DIMENSIONS:
+        path = PROFILES_DIR / f"{dimension}.json"
+        if not path.is_file():
+            errors.append(f"missing profile file: {path.name}")
+            profiles[dimension] = []
+            profile_ids[dimension] = set()
+            continue
+        definitions = json.loads(path.read_text(encoding="utf-8"))
+        profiles[dimension] = definitions
+        ids = {item.get("id") for item in definitions}
+        if len(ids) != len(definitions):
+            errors.append(f"{dimension}: duplicate profile id")
+        profile_ids[dimension] = ids
+        names: dict[str, str] = {}
+        for item in definitions:
+            identifier = item.get("id")
+            for name in [identifier, *item.get("aliases", [])]:
+                if not isinstance(name, str) or re.fullmatch(r"[a-z0-9][a-z0-9-]*", name) is None:
+                    errors.append(f"{dimension}: invalid profile name {name}")
+                    continue
+                if name in names:
+                    errors.append(
+                        f"{dimension}: profile name collision {name} "
+                        f"between {names[name]} and {identifier}"
+                    )
+                names[name] = identifier
+
+    declared_profiles = index.get("profiles", {})
+    for dimension in PROFILE_DIMENSIONS:
+        rel = declared_profiles.get(dimension)
+        if not rel:
+            errors.append(f"index.json profiles.{dimension} is missing")
+        elif not (CATALOG_DIR / rel).is_file():
+            errors.append(f"index.json profiles.{dimension} points to missing file: {rel}")
+
+    presentation_defaults = index.get("presentation_defaults", {})
+    audience_ids = profile_ids.get("audiences", set())
+    if presentation_defaults.get("source_evidence") != "provenance-only":
+        errors.append("presentation_defaults.source_evidence must be provenance-only")
+    group_defaults = presentation_defaults.get("primary_audience_by_group")
+    if not isinstance(group_defaults, dict):
+        errors.append("presentation_defaults.primary_audience_by_group must be an object")
+        group_defaults = {}
+    for group, audience in group_defaults.items():
+        if group not in set(index.get("groups", [])):
+            errors.append(f"presentation_defaults: unknown group {group}")
+        if audience not in audience_ids:
+            errors.append(f"presentation_defaults: unknown primary audience {audience}")
+    audience_defaults = presentation_defaults.get("by_audience")
+    if not isinstance(audience_defaults, dict):
+        errors.append("presentation_defaults.by_audience must be an object")
+        audience_defaults = {}
+    for audience in audience_ids:
+        value = audience_defaults.get(audience)
+        if not isinstance(value, dict):
+            errors.append(f"presentation_defaults: missing audience defaults for {audience}")
+            continue
+        _validate_presentation(value, f"presentation_defaults.by_audience.{audience}", errors, require_all=True)
+    for audience in audience_defaults:
+        if audience not in audience_ids:
+            errors.append(f"presentation_defaults: unknown audience {audience}")
+
+    index_ids = [row["id"] for row in index.get("document_types", [])]
+    if len(index_ids) != len(set(index_ids)):
+        errors.append("index.json has duplicate document type ids")
+    declared_records: set[Path] = set()
+    for row in index.get("document_types", []):
+        record = row.get("record")
+        if not record:
+            errors.append(f"{row['id']}: index.json entry missing record path")
+            continue
+        record_path = CATALOG_DIR / record
+        if not record_path.is_file():
+            errors.append(f"{row['id']}: record path does not resolve: {record}")
+            continue
+        declared_records.add(record_path.resolve())
+    # Records may live flat in types/ (pre-migration) or under documents/
+    # (per-group folders + flat small groups, post-migration); scan both.
+    # Generated routers (index.json, README.md) are excluded, not records.
+    candidate_dirs = [d for d in (TYPES_DIR, CATALOG_DIR / "documents") if d.is_dir()]
+    on_disk_records: set[Path] = set()
+    for base in candidate_dirs:
+        for path in base.rglob("*.json"):
+            if path.name == "index.json":
+                continue
+            on_disk_records.add(path.resolve())
+    for path in sorted(on_disk_records - declared_records):
+        errors.append(f"orphan record file not in index: {path.relative_to(CATALOG_DIR)}")
+
+    groups = set(index.get("groups", []))
+    capabilities = set(index.get("capabilities", []))
+    static_ids: set[str] = set()
+    static_paths: set[str] = set()
+    dynamic_types: set[str] = set()
+
+    for doc_id in index_ids:
+        try:
+            doc = load_type(doc_id)
+        except ValueError as exc:
+            errors.append(str(exc))
+            continue
+        missing = sorted(REQUIRED_DOC_FIELDS - set(doc))
+        if missing:
+            errors.append(f"{doc_id}: missing fields: {', '.join(missing)}")
+            continue
+        if doc["id"] != doc_id:
+            errors.append(f"{doc_id}: id field mismatch ({doc['id']})")
+        selection = doc.get("selection", {})
+        if doc["group"] not in groups:
+            errors.append(f"{doc_id}: unknown group {doc['group']}")
+        if selection.get("min_tier") not in tier_ids:
+            errors.append(f"{doc_id}: unknown tier {selection.get('min_tier')}")
+        if doc.get("target_depth") not in TARGET_DEPTHS:
+            errors.append(f"{doc_id}: target_depth must be one of: {', '.join(sorted(TARGET_DEPTHS))}")
+        model_depth = doc.get("model_depth")
+        if model_depth is not None:
+            if not isinstance(model_depth, dict) or not model_depth:
+                errors.append(f"{doc_id}: model_depth must be a non-empty object")
+            else:
+                for model, rung in model_depth.items():
+                    if model not in MODEL_DEPTHS:
+                        errors.append(f"{doc_id}: unknown model_depth model {model}")
+                    elif rung not in MODEL_DEPTHS[model]:
+                        errors.append(f"{doc_id}: invalid {model} model_depth rung {rung}")
+        revision = doc.get("contract_revision")
+        if revision is not None and (not isinstance(revision, str) or not CONTRACT_REVISION_RE.fullmatch(revision)):
+            errors.append(f"{doc_id}: contract_revision must be MAJOR.MINOR.PATCH")
+        if "requires_analysis" in doc and not isinstance(doc["requires_analysis"], bool):
+            errors.append(f"{doc_id}: requires_analysis must be boolean")
+        if "presentation" in doc:
+            _validate_presentation(doc["presentation"], f"{doc_id}: presentation", errors, audience_ids=audience_ids)
+        if "selection_evidence_required" in doc and not isinstance(doc["selection_evidence_required"], bool):
+            errors.append(f"{doc_id}: selection_evidence_required must be boolean")
+        selectors = selection.get("selectors", {})
+        if selectors.get("frameworks"):
+            errors.append(f"{doc_id}: frameworks may tailor evidence but must not select documents")
+        for dimension, values in selectors.items():
+            if dimension not in profile_ids:
+                errors.append(f"{doc_id}: unknown selector dimension {dimension}")
+                continue
+            for value in values:
+                if value not in profile_ids[dimension]:
+                    errors.append(f"{doc_id}: unknown {dimension} selector {value}")
+        for requirement in doc.get("requires", []):
+            if requirement not in capabilities:
+                errors.append(f"{doc_id}: unknown requirement {requirement}")
+        if not isinstance(doc.get("write_order"), int):
+            errors.append(f"{doc_id}: write_order must be an integer")
+        if doc.get("nav_order") is not None and not isinstance(doc.get("nav_order"), int):
+            errors.append(f"{doc_id}: nav_order must be an integer")
+        form = doc.get("dominant_form")
+        if form not in ALLOWED_DOMINANT_FORMS:
+            errors.append(f"{doc_id}: invalid dominant_form {form!r}")
+        errors.extend(_validate_illustration_views(doc, doc_id))
+        # answer_shape is required (REQUIRED_DOC_FIELDS above); null is valid
+        # only for the one non-Markdown template output. Beyond the enum, it
+        # must agree with its two paired fields.
+        shape = doc.get("answer_shape")
+        if shape not in ALLOWED_ANSWER_SHAPES:
+            errors.append(f"{doc_id}: invalid answer_shape {shape!r}")
+        elif (selection.get("mode") == "compact") != (shape == "merged-section-spine"):
+            errors.append(
+                f"{doc_id}: merged-section-spine and selection.mode compact must agree"
+            )
+        elif doc.get("target_depth") == "router" and shape not in ROUTER_SHAPES:
+            errors.append(
+                f"{doc_id}: target_depth router requires answer_shape "
+                f"{' or '.join(sorted(ROUTER_SHAPES))}"
+            )
+        summary = doc.get("summary")
+        if not summary or not isinstance(summary, str) or len(summary) > 160:
+            errors.append(f"{doc_id}: summary must be a non-empty string of at most 160 characters")
+        contract = doc.get("contract_file")
+        if not contract or not (SKILL_ROOT / contract).is_file():
+            errors.append(f"{doc_id}: missing contract {contract}")
+        template = doc.get("template_file")
+        if not template or not (SKILL_ROOT / template).is_file():
+            errors.append(f"{doc_id}: missing template {template}")
+        if "scaffold_template" in doc:
+            errors.append(f"{doc_id}: obsolete scaffold_template field remains; use template_file")
+        instruction = doc.get("instruction_file")
+        if instruction and not (SKILL_ROOT / instruction).is_file():
+            errors.append(f"{doc_id}: missing instruction {instruction}")
+        if selection.get("mode") == "static":
+            if doc["id"] in static_ids:
+                errors.append(f"duplicate static id: {doc['id']}")
+            if doc["path"] in static_paths:
+                errors.append(f"duplicate static path: {doc['path']}")
+            static_ids.add(doc["id"])
+            static_paths.add(doc["path"])
+        elif selection.get("mode") == "dynamic":
+            if doc["type"] in dynamic_types:
+                errors.append(f"duplicate dynamic type: {doc['type']}")
+            dynamic_types.add(doc["type"])
+            if doc["type"] in index_ids and doc["type"] != doc_id:
+                errors.append(f"{doc_id}: dynamic type collides with catalog id {doc['type']}")
+        elif selection.get("mode") == "compact":
+            if not doc.get("compact_members"):
+                errors.append(f"{doc_id}: compact documents must declare compact_members")
+            if doc.get("compact_target") and doc.get("compact_target") != doc.get("path"):
+                errors.append(f"{doc_id}: compact_target must match path")
+            if doc["id"] in static_ids:
+                errors.append(f"duplicate static id: {doc['id']}")
+            if doc["path"] in static_paths:
+                errors.append(f"duplicate static path: {doc['path']}")
+            static_ids.add(doc["id"])
+            static_paths.add(doc["path"])
+        else:
+            errors.append(f"{doc_id}: selection.mode must be static or dynamic")
+    compact_ids = {
+        doc_id for doc_id in index_ids
+        if load_type(doc_id).get("selection", {}).get("mode") == "compact"
+    }
+    for doc_id in index_ids:
+        doc = load_type(doc_id)
+        group = doc.get("compact_group")
+        if group is not None and group not in compact_ids:
+            errors.append(f"{doc_id}: compact_group references missing compact document {group}")
+        for member_id in doc.get("compact_members", []):
+            if member_id not in index_ids:
+                errors.append(f"{doc_id}: compact_members references unknown document {member_id}")
+            elif load_type(member_id).get("compact_group") != doc_id:
+                errors.append(f"{doc_id}: member {member_id} does not declare compact_group {doc_id}")
+            if doc.get("selection", {}).get("mode") != "compact":
+                errors.append(f"{doc_id}: compact_members belongs on a compact document")
+        core = [
+            member_id for member_id in doc.get("compact_members", [])
+            if member_id in index_ids and is_core_member(load_type(member_id))
+        ]
+        if len(core) > COMPACT_CORE_CAP:
+            errors.append(
+                f"{doc_id}: {len(core)} core compact_members exceeds the "
+                f"{COMPACT_CORE_CAP}-member depth brake (document-composition.md)"
+            )
+
+    # §0.10: infrastructure-platform must carry widened signals + aliases
+    infra = next(
+        (item for item in profiles.get("shapes", []) if item.get("id") == "infrastructure-platform"),
+        None,
+    )
+    if infra is None:
+        errors.append("shapes: infrastructure-platform missing")
+    else:
+        patterns = {s.get("pattern") for s in infra.get("signals", [])}
+        for required in ("ansible.cfg", "**/kustomization.yaml", "**/playbook*.yml"):
+            if required not in patterns:
+                errors.append(f"infrastructure-platform missing signal pattern {required}")
+        aliases = set(infra.get("aliases", []))
+        for alias in ("deployment-config", "iac"):
+            if alias not in aliases:
+                errors.append(f"infrastructure-platform missing alias {alias}")
+    return errors
+
+
+def _validate_illustration_views(doc: dict, doc_id: str) -> list[str]:
+    """Every declared view names a real form, a section, and its own question.
+
+    The question is the load-bearing field: a view that cannot say which reader
+    question it answers, that no other view here answers, is decoration."""
+    views = doc.get("illustration_views")
+    if views is None:
+        return []
+    errors: list[str] = []
+    if not isinstance(views, list) or not views:
+        return [f"{doc_id}: illustration_views must be a non-empty array"]
+    seen: set[tuple[str, str]] = set()
+    for index, view in enumerate(views):
+        where = f"{doc_id}: illustration_views[{index}]"
+        if not isinstance(view, dict):
+            errors.append(f"{where} must be an object")
+            continue
+        form = view.get("form")
+        if form not in ALLOWED_VIEW_FORMS:
+            errors.append(f"{where} invalid form {form!r}")
+        for field in ("section", "question"):
+            if not view.get(field) or not isinstance(view[field], str):
+                errors.append(f"{where} {field} must be a non-empty string")
+        depth = view.get("depth")
+        if depth is not None and depth not in VIEW_DEPTHS:
+            errors.append(f"{where} invalid depth {depth!r}")
+        if "required" in view and not isinstance(view["required"], bool):
+            errors.append(f"{where} required must be boolean")
+        key = (str(form), str(view.get("section")))
+        if key in seen:
+            errors.append(f"{where} duplicates form {form!r} in section {view.get('section')!r}")
+        seen.add(key)
+    declared = doc.get("dominant_form")
+    forms = {view.get("form") for view in views if isinstance(view, dict)}
+    if declared in ALLOWED_VIEW_FORMS and declared not in forms:
+        errors.append(
+            f"{doc_id}: dominant_form {declared!r} is not among illustration_views forms"
+        )
+    return errors
+
+
+def _validate_presentation(
+    value: object,
+    label: str,
+    errors: list[str],
+    *,
+    require_all: bool = False,
+    audience_ids: set[str] | None = None,
+) -> None:
+    if not isinstance(value, dict):
+        errors.append(f"{label} must be an object")
+        return
+    allowed = {"primary_audience", *PRESENTATION_VALUES}
+    unknown = sorted(set(value) - allowed)
+    if unknown:
+        errors.append(f"{label}: unknown fields: {', '.join(unknown)}")
+    if require_all:
+        missing = sorted(set(PRESENTATION_VALUES) - set(value))
+        if missing:
+            errors.append(f"{label}: missing fields: {', '.join(missing)}")
+    if "primary_audience" in value and audience_ids is not None and value["primary_audience"] not in audience_ids:
+        errors.append(f"{label}: unknown primary audience {value['primary_audience']}")
+    for field, allowed_values in PRESENTATION_VALUES.items():
+        if field in value and value[field] not in allowed_values:
+            errors.append(f"{label}: invalid {field} {value[field]}")
+
+
+FACT_MAP_PATH = "content/fact-map.md"
+FACT_MAP_ROW_RE = re.compile(r"^\|\s*([^|]+?)\s*\|\s*`([^`]+)`\s*\|\s*(.+?)\s*\|\s*(.+?)\s*\|$", re.MULTILINE)
+KEEP_OUT_SECTION_RE = re.compile(r"## Keep out\n\n(.*?)\n\n## ", re.DOTALL)
+
+
+def _keep_out_targets(contract_text: str) -> list[str]:
+    match = KEEP_OUT_SECTION_RE.search(contract_text)
+    if not match:
+        return []
+    targets = []
+    for line in match.group(1).splitlines():
+        if not line.startswith("|") or "---" in line:
+            continue
+        cells = [cell.strip() for cell in line.strip("|").split("|")]
+        if len(cells) >= 2:
+            targets.append(cells[-1])
+    return targets
+
+
+def validate_fact_map() -> list[str]:
+    """Every row of `content/fact-map.md` names a fact class one document type
+    owns and one or more others are contested against. Agreement means: each
+    contested type's `## Keep out` table routes that fact to the owner —
+    otherwise the map and the contracts it describes have drifted apart."""
+    errors: list[str] = []
+    fact_map_file = SKILL_ROOT / FACT_MAP_PATH
+    if not fact_map_file.is_file():
+        return [f"missing {FACT_MAP_PATH}"]
+    text = fact_map_file.read_text(encoding="utf-8")
+    rows = FACT_MAP_ROW_RE.findall(text)
+    if not rows:
+        return [f"{FACT_MAP_PATH}: no data rows found"]
+    for fact, owner, contested, _how in rows:
+        try:
+            owner_detail = load_type(owner)
+        except ValueError:
+            errors.append(f"fact-map row {fact.strip()!r}: unknown owner id {owner!r}")
+            continue
+        owner_contract = owner_detail.get("contract_file")
+        if not owner_contract or not (SKILL_ROOT / owner_contract).is_file():
+            errors.append(f"fact-map row {fact.strip()!r}: owner {owner!r} has no contract file")
+            continue
+        for contested_id in re.findall(r"`([^`]+)`", contested):
+            try:
+                contested_detail = load_type(contested_id)
+            except ValueError:
+                errors.append(f"fact-map row {fact.strip()!r}: unknown contested id {contested_id!r}")
+                continue
+            contested_contract = contested_detail.get("contract_file")
+            if not contested_contract or not (SKILL_ROOT / contested_contract).is_file():
+                errors.append(f"fact-map row {fact.strip()!r}: contested id {contested_id!r} has no contract file")
+                continue
+            contested_text = (SKILL_ROOT / contested_contract).read_text(encoding="utf-8")
+            targets = _keep_out_targets(contested_text)
+            if not any(f"`{owner}`" in target for target in targets):
+                errors.append(
+                    f"fact-map row {fact.strip()!r}: {contested_id!r}'s Keep out "
+                    f"does not route to owner {owner!r}"
+                )
+    return errors
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--tier", choices=["spine", "diligence", "portfolio"])
+    parser.add_argument("--id", dest="doc_id")
+    parser.add_argument("--ids", help="Comma-separated document type ids")
+    parser.add_argument(
+        "--profile",
+        help="Profile dimension: shapes|platforms|frameworks|concerns|audiences",
+    )
+    parser.add_argument("--applicable", action="store_true")
+    parser.add_argument("--shape", action="append", default=[])
+    parser.add_argument("--platform", action="append", default=[])
+    parser.add_argument("--framework", action="append", default=[])
+    parser.add_argument("--concern", action="append", default=[])
+    parser.add_argument("--audience", action="append", default=[])
+    parser.add_argument(
+        "--group", action="append", default=[],
+        help="Restrict --applicable to these catalog groups (repeatable, "
+             "aliases accepted). Omit for every group.",
+    )
+    parser.add_argument(
+        "--groups", action="store_true",
+        help="List every catalog group with its aliases and unlocking audiences",
+    )
+    parser.add_argument(
+        "--applicable-tier",
+        dest="applicable_tier",
+        choices=["spine", "diligence", "portfolio"],
+        default="diligence",
+    )
+    parser.add_argument("--include-dynamic", action="store_true")
+    parser.add_argument("--legacy", action="store_true", help="Emit reconstructed monolith JSON")
+    parser.add_argument("--validate", action="store_true")
+    parser.add_argument("--validate-fact-map", action="store_true")
+    parser.add_argument("--category", dest="category", help="Group id, e.g. architecture")
+    parser.add_argument("--route", dest="route_id", help="Document id to resolve")
+    parser.add_argument(
+        "--repo", type=Path, default=None,
+        help="Target repo, for --route on a tier-spanning compact document: "
+             "narrows its composed contract to what the manifest actually "
+             "folded, when a manifest is present",
+    )
+    args = parser.parse_args(argv)
+
+    modes = sum(
+        bool(x)
+        for x in (
+            args.tier,
+            args.doc_id,
+            args.ids,
+            args.profile,
+            args.applicable,
+            args.validate,
+            args.validate_fact_map,
+            args.legacy,
+            args.category,
+            args.route_id,
+            args.groups,
+        )
+    )
+    if modes != 1:
+        return fail(
+            "specify exactly one of --tier, --id, --ids, --profile, "
+            "--applicable, --legacy, --validate, --validate-fact-map, "
+            "--category, --route, --groups",
+            2,
+        )
+
+    try:
+        if args.validate:
+            errors = validate()
+            if errors:
+                for error in errors:
+                    print(f"error: {error}", file=sys.stderr)
+                print(f"{len(errors)} validation error(s)", file=sys.stderr)
+                return 1
+            print("catalog ok")
+            return 0
+        if args.validate_fact_map:
+            errors = validate_fact_map()
+            if errors:
+                for error in errors:
+                    print(f"error: {error}", file=sys.stderr)
+                print(f"{len(errors)} fact-map error(s)", file=sys.stderr)
+                return 1
+            print("fact-map ok")
+            return 0
+        if args.legacy:
+            print(dump_json(as_legacy_catalog()), end="")
+            return 0
+        if args.tier:
+            print(dump_json(tier_rows(args.tier)), end="")
+            return 0
+        if args.doc_id:
+            print(dump_json(merged_record(args.doc_id)), end="")
+            return 0
+        if args.ids:
+            ids = [part.strip() for part in args.ids.split(",") if part.strip()]
+            print(dump_json([merged_record(doc_id) for doc_id in ids]), end="")
+            return 0
+        if args.profile:
+            print(dump_json(load_profile(args.profile)), end="")
+            return 0
+        if args.applicable:
+            ids = applicable(
+                shape=args.shape,
+                platform=args.platform,
+                framework=args.framework,
+                concern=args.concern,
+                audience=args.audience,
+                tier=args.applicable_tier,
+                group=args.group,
+                include_dynamic=args.include_dynamic,
+            )
+            print(dump_json(ids), end="")
+            return 0
+        if args.groups:
+            print(dump_json(groups()), end="")
+            return 0
+        if args.category:
+            print(dump_json(category(args.category)), end="")
+            return 0
+        if args.route_id:
+            print(dump_json(route(args.route_id, args.audience, args.repo)), end="")
+            return 0
+    except ValueError as exc:
+        return fail(str(exc), 2)
+    return 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Add Frontend Notification"
+  short_description: "Integrate frontend toast notifications"
+  default_prompt: "Use $add-frontend-notification to integrate Butterup toast notifications into this frontend project."

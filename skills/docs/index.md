@@ -1,0 +1,164 @@
+## Features
+
+### Implementation Modes
+
+- 👨 **Advise mode** — *guidance*: agent researches topics, answers questions, and guides manual implementation.
+- 🧑‍💻 **Assist mode** — *interactive*: you make decisions while agent orchestration does the work and suggests next steps.
+- 🤖 **Auto mode** — *autonomous*: agent executes structured design work until completion.
+
+### Workflow Optimizations
+
+- 📦 **Cross-project tasking** — delegate investigation or edits to isolated OpenCode sessions in external directories.
+- 🪙 **Cost-saving workflows** — improve performance and reduce token usage with smart orchestration, tiered agent models, Caveman English.
+- 🔒 **Secret-safe tools** — predefined credential keys resolve at tool runtime; never save secrets, credentials, tokens, or private keys to durable memory.
+- ⚠️ **Safe hand-offs** — provide a thorough manual task tutorial when an operation is unsafe.
+- 📚 **Durable local memory** — smart agents automatically recall matching durable memories on first eligible user text; primary agents and `auto-troubleshoot` can manually recall prior fixes or forget confirmed misleading/outdated IDs. See [memory guidance](skill.md).
+- 🧹 **Agent cleanup** — agents remove temporary files and stop stray processes they started after debugging.
+
+### Build-in Tools
+
+- 🗄️ **Read-only database inspection** — discover configured database tables and read one table at a time without write access.
+- 🌐 **HTTP REST client** — simulate API calls for troubleshooting.
+- 🔀 **Git tools** — inspect changes and commit updates to Git repositories.
+- 🔐 **SSH tools** — run remote commands and manage files through environment-keyed tools.
+- 🧪 **Sandbox isolation** — agents automatically manage and experiment in their own isolated sandboxes.
+- 🛠️ **Self-building tools** — agents create durable per-job Node `.mjs` tools, reconcile dependencies, run finite scripts, and manage long-running services.
+
+As well as [OpenCode V2 bundled tools](https://opencode.ai/v2/docs/tools/).
+
+## Installation
+
+* AI agents: follow installation at [installation guide](installation.md).
+* Humans: Continue to read.
+
+### Prerequisites
+
+- [OpenCode](https://opencode.ai) is required to load and use AutoCode.
+- The npm package / plugin entry is `@ahumandev/autocode`.
+- Use native CMD on Windows; use Bash on Linux.
+- [Bubblewrap](https://github.com/containers/bubblewrap) is optional on Linux for sandbox execution. It is not used on Windows.
+- [Bun](https://bun.sh) is needed only to build from source or install repository shim scripts.
+
+#### Optional
+
+- Linux sandbox execution needs Bubblewrap and host user namespaces.
+- Windows does not use Bubblewrap. Sandbox agents and sandbox tools are not registered there.
+- Bun build and local shim installation scripts are cross-platform Bun scripts; Bun is not needed for public plugin installation.
+
+### Installation for Humans
+
+Run this in native CMD on Windows or Bash on Linux:
+
+```text
+opencode plugin add @ahumandev/autocode@latest
+```
+
+OpenCode loads global plugins at startup. Default config directory is `<home>/.config/opencode`; `OPENCODE_CONFIG_DIR` overrides it, then `XDG_CONFIG_HOME/opencode` applies when `OPENCODE_CONFIG_DIR` is unset.
+
+Start or restart OpenCode, then run `/autocode-install`. It checks and remediates Windows dependencies only. On Linux, install Bubblewrap separately when sandbox execution is needed. Generated skills are stored in `<home>/.agents/skills`.
+
+#### Verify installation
+
+1. Start or restart OpenCode after installation.
+2. Run `/autocode-install`.
+3. Confirm AutoCode commands or agents load after startup.
+4. Confirm generated skills appear in `<home>/.agents/skills/autocode` after first startup.
+
+### Linux MCP setup
+
+Use these optional MCP servers only on Linux. Add each command or URL to MCP client configuration; do not globally install packages.
+
+#### Chrome DevTools MCP
+
+Install current Google Chrome and Node LTS with npm. Use this local server command:
+
+```bash
+npx -y chrome-devtools-mcp@latest
+```
+
+For a sandbox or container, start Chrome with a remote-debugging port and a non-default profile directory:
+
+```bash
+google-chrome --remote-debugging-port=9222 --user-data-dir="$HOME/.cache/chrome-devtools-mcp"
+```
+
+Then use this server command:
+
+```bash
+npx -y chrome-devtools-mcp@latest --browser-url=http://127.0.0.1:9222
+```
+
+See [Chrome DevTools MCP](https://github.com/ChromeDevTools/chrome-devtools-mcp) and its [troubleshooting guide](https://github.com/ChromeDevTools/chrome-devtools-mcp/blob/main/docs/troubleshooting.md).
+
+#### Context7 MCP
+
+Context7 local mode needs Node `>=20.18.1`. Use this server command:
+
+```bash
+npx -y @upstash/context7-mcp@latest --api-key YOUR_API_KEY
+```
+
+Remote fallback configuration uses URL `https://mcp.context7.com/mcp` and header `Authorization: Bearer YOUR_API_KEY`. Verify remote access:
+
+```bash
+curl https://mcp.context7.com/ping
+```
+
+See [Context7 client setup](https://context7.com/docs/resources/all-clients) and [troubleshooting](https://context7.com/docs/resources/troubleshooting).
+
+#### Excel MCP
+
+[Excel MCP Server](https://github.com/negokaz/excel-mcp-server#installing-via-npm) supports Linux `ia32`, `x64`, and `arm64`. It requires Node.js 20+; Excel, LibreOffice, Go, a compiler, and native libraries are not required.
+
+Use this local server command:
+
+```bash
+npx --yes @negokaz/excel-mcp-server@0.12.0
+```
+
+For OpenCode local MCP configuration, use this command array:
+
+```json
+["npx", "--yes", "@negokaz/excel-mcp-server@0.12.0"]
+```
+
+Optional `EXCEL_MCP_PAGING_CELLS_LIMIT` defaults to `4000`. Spreadsheet paths must be absolute and allowed by file permissions.
+
+#### Git
+
+Git is a built-in tool, not an MCP server. Confirm Git CLI is available with `git --version`; do not install a Git MCP package.
+
+### Update the plugin version
+
+Update public plugin with native CMD on Windows or Bash on Linux:
+
+```text
+opencode plugin update @ahumandev/autocode@latest
+```
+
+Restart OpenCode after update. It detects OS at startup and uses CMD for Windows agents or Bash for Linux agents.
+
+### Uninstall
+
+Run `opencode plugin remove @ahumandev/autocode@latest`, or remove `@ahumandev/autocode` from the [global OpenCode V2 config](https://opencode.ai/v2/docs/config/) `plugins` array, then restart OpenCode. Default config directory is `<home>/.config/opencode`.
+
+### Troubleshooting
+
+- Confirm `opencode --version` works; use `where opencode` in Windows CMD or `command -v opencode` in Linux Bash.
+- Confirm `opencode plugin list` includes `@ahumandev/autocode`.
+- Confirm config directory. Note that `OPENCODE_CONFIG_DIR` overrides default opencode config directory.
+- Keep JSON or JSONC valid and preserve unrelated config.
+- Restart OpenCode after config or plugin changes, then run `/autocode-install`.
+- Linux sandbox execution needs Bubblewrap; Windows does not use it and does not register sandbox agents or tools.
+
+## Core
+
+- [Configuration](configuration.md) — config locations, keys, model tiers, and DB/SSH environment variables.
+- [Usage](usage.md) — more details on how to use AutoCode.
+- [Local Memory](skill.md) — local memories and reusable guidance that extend AutoCode behavior.
+- [Terminology](terminology.md) — glossary of AutoCode concepts.
+
+## Development & Distribution
+
+- [Development](development.md) — architecture, local setup, commands, testing, and local plugin deployment.
+- [Distribution Guide](distribution.md) — distributing AutoCode on public registries.

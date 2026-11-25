@@ -1,0 +1,130 @@
+name: Validate OpenCode Skill
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.12'
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+
+    - name: Validate lib imports and CLI
+      run: |
+        python -c "from lib.main import DjangoDevPro; print('OK')"
+        python lib/main.py --help
+
+    - name: Validate skill structure
+      run: |
+        python3 << 'EOF'
+        import json
+        import re
+        import sys
+        from pathlib import Path
+
+        repo = Path.cwd()
+        errors = []
+
+        # 1. SKILL.md must exist
+        skill_md = repo / "SKILL.md"
+        if not skill_md.exists():
+            errors.append("SKILL.md is missing")
+        else:
+            content = skill_md.read_text(encoding="utf-8")
+            # 2. Frontmatter must exist and contain required keys
+            if not content.startswith("---"):
+                errors.append("SKILL.md must start with frontmatter")
+            else:
+                parts = content.split("---", 2)
+                if len(parts) < 3:
+                    errors.append("SKILL.md frontmatter is malformed")
+                else:
+                    frontmatter = parts[1].strip()
+                    fm_keys = {}
+                    for line in frontmatter.splitlines():
+                        if ":" in line:
+                            key, value = line.split(":", 1)
+                            fm_keys[key.strip()] = value.strip()
+                    if "name" not in fm_keys:
+                        errors.append("SKILL.md frontmatter missing 'name'")
+                    elif fm_keys["name"] != "django-dev-pro":
+                        errors.append(f"SKILL.md name must be 'django-dev-pro', got '{fm_keys['name']}'")
+                    if "description" not in fm_keys:
+                        errors.append("SKILL.md frontmatter missing 'description'")
+
+        # 3. skill.yml must exist
+        if not (repo / "skill.yml").exists():
+            errors.append("skill.yml is missing")
+
+        # 4. install.sh must target ~/.config/opencode/skills/django-dev-pro
+        install_sh = repo / "install.sh"
+        if install_sh.exists():
+            install_content = install_sh.read_text(encoding="utf-8")
+            if "~/.config/opencode/skills" not in install_content:
+                errors.append("install.sh does not target ~/.config/opencode/skills")
+            if "~/.opencode/skills" in install_content:
+                errors.append("install.sh still references old ~/.opencode/skills path")
+
+        else:
+            errors.append("install.sh is missing")
+
+        # 5. No broken references to old CLI files in tracked docs
+        # lib/main.py is now a real file, so references to it are allowed.
+        forbidden_patterns = [
+            (r"django-dev-pro\.sh", "reference to deprecated django-dev-pro.sh"),
+            (r"setup\.py", "reference to deprecated setup.py"),
+            (r"console_scripts", "reference to setuptools console_scripts"),
+        ]
+        check_paths = [
+            repo / "README.md",
+            repo / "README_GITHUB.md",
+            repo / "INSTALLATION.md",
+            repo / "SKILL_INSTALL.md",
+            repo / "EXPORT_TO_GITHUB.md",
+            repo / "examples" / "usage_examples.md",
+            repo / "skill.yml",
+            repo / "install.sh",
+        ]
+        for path in check_paths:
+            if not path.exists():
+                continue
+            text = path.read_text(encoding="utf-8")
+            for pattern, msg in forbidden_patterns:
+                if re.search(pattern, text):
+                    # Allow references inside legacy/ README or when clearly documenting deprecation
+                    if "legacy" in str(path):
+                        continue
+                    errors.append(f"{path.name}: {msg}")
+
+        # 6. Example JSON must be valid
+        example_json = repo / "configs" / "project_commands.example.json"
+        if example_json.exists():
+            try:
+                json.loads(example_json.read_text(encoding="utf-8"))
+            except json.JSONDecodeError as e:
+                errors.append(f"configs/project_commands.example.json is invalid JSON: {e}")
+        else:
+            errors.append("configs/project_commands.example.json is missing")
+
+        if errors:
+            print("❌ Validation failed:")
+            for err in errors:
+                print(f"  - {err}")
+            sys.exit(1)
+        else:
+            print("✅ Skill structure is valid for OpenCode")
+        EOF

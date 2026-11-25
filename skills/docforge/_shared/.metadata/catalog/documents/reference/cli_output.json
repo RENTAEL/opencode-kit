@@ -1,0 +1,34 @@
+{
+  "id": "cli_output",
+  "type": "output-exit-contract",
+  "summary": "Stdout/stderr ownership, formats, exit codes, stability, scripting behavior",
+  "contract_file": "content/reference/contracts/output-exit-contract.md",
+  "path": "docs/reference/output-and-exit-codes.md",
+  "group": "reference",
+  "selection": {
+    "mode": "static",
+    "min_tier": "spine",
+    "selectors": {
+      "shapes": [
+        "cli-tui"
+      ]
+    },
+    "condition": null
+  },
+  "instruction_file": "content/reference/instructions.md",
+  "requires": [
+    "code_graph",
+    "manifests"
+  ],
+  "target_depth": "reference",
+  "answer_shape": "lookup",
+  "write_order": 65,
+  "nav_order": 66,
+  "provenance_mode": "sections",
+  "audit_profile": "standard",
+  "dominant_form": "table",
+  "contract_revision": "3.0.0",
+  "template_file": "content/reference/templates/output-exit-contract.md",
+  "compact_group": "reference_compact",
+  "compact_order": 15
+}

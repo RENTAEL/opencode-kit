@@ -1,0 +1,89 @@
+---
+name: doctor
+description: "Audience: Claude Code, Codex, future agent runtimes. Goal: leave the user with a working airc, not a diagnosis to act on."
+---
+# /doctor ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â operational reference
+
+Audience: Claude Code, Codex, future agent runtimes. Goal: leave the user with a working airc, not a diagnosis to act on.
+
+## Modes
+
+| Command | Purpose |
+|---|---|
+| `airc doctor` | env probe ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â fast, local |
+| `airc doctor --health` | live route/process health |
+| `airc doctor --fix` | apply safe auto-recovery for detected issues (currently: stale daemon sockets) |
+
+`--health` and `--fix` compose with the env probe and with each other.
+
+For a read-only machine observation, use `airc status --json`. Schema version 1
+has `schema_version`, `state`, `socket`, `endpoint`, `daemon`, and `error` fields.
+`socket` is the requested socket path and `endpoint` its native IPC address.
+`running` carries the daemon's status response; build metadata is reported only
+when that daemon supplies it. No PID is inferred from a file or process name.
+`absent` is returned only for a missing or refused endpoint connection. Both
+states exit zero. `unknown` carries an error and exits nonzero; access denial,
+timeout, malformed responses, or mid-call disconnects are never absence. The
+unused `daemon` or `error` field is null. Observation never starts a daemon or
+clears operator-stop intent. Default human `airc status` behavior is unchanged.
+
+## Decision tree
+
+When something feels wrong, in this order:
+
+1. **`airc doctor --health`** ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â daemon process state and its timestamped route/delivery snapshot. Check the observation age and intended peer's acknowledgement; a daemon ACK does not prove the intended reader consumed a message.
+2. **`airc doctor`** ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â env regression check.
+3. **`airc inbox`** ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â pull buffered frames for the current room to confirm whether traffic is arriving.
+4. **`airc doctor --fix`** ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â apply safe auto-recovery (e.g. clear a stale daemon socket) once 1-3 point at a recoverable local issue.
+
+## --health output classes
+
+| Marker | Meaning | Action |
+|---|---|---|
+| `[ok] gh core rate-limit: <N>/5000` | Healthy headroom | None |
+| `[info] gh core rate-limit: <N>/5000` (<1000) | Reduced rendezvous headroom | Avoid unnecessary GitHub discovery |
+| `[WARN] gh core rate-limit: <N>/5000` (<100) | Bus may stall soon | Wait for window reset; peers resume automatically |
+| `[BLOCKED] gh API not reachable` | Network or token | Run `airc doctor` for env probe |
+| `[ok] gh governor: no active backoff` | Cross-process gh guard is healthy | None |
+| `[WARN] gh governor blocked <N>/<M>` | Local guard prevented gh spam recently | Wait; inspect top classes in output |
+| `[BLOCKED] gh governor shared backoff active` | GitHub told this user/device to wait | Do not retry; wait for displayed seconds |
+| `[ok] airc process running` | Daemon up | None |
+| `[WARN] airc process not running` | Disconnected scope | `airc join` |
+| `[info] route health: daemon snapshot ... connected LAN peer(s)` | Connection count from the daemon's last refresh; not delivery confirmation | Read the per-peer delivery findings |
+| `[WARN] route health: ... no connected LAN peers` | The daemon observed zero connected LAN peers | Inspect the intended peer's route; other transports are not measured by this count |
+| `[WARN] ... UNAVAILABLE`, `STALE`, or `UNKNOWN` | The daemon observation is missing, old, or cannot be dated | Check daemon build/status and route-refresh diagnostics; do not infer delivery success or failure |
+| `[info] delivery account scope` | Trust-store classification of peers that have acknowledged | `OwnAccount` means shared account ownership, not physical loopback |
+
+## env probe (`airc doctor`)
+
+Emits one line per prereq with `[ok]`, `[MISSING]`, or `[info]` (optional). For every `[MISSING]`, the next line is `Fix: <exact command>` for the platform's package manager (brew/apt/dnf/pacman/apk).
+
+**Act on findings:**
+
+- `[MISSING]` with a `Fix:` line ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ run it. Most are unattended (`brew install gh`, `sudo apt-get install -y openssh-client`).
+- `gh authenticated (gist scope)` is interactive (browser flow) ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ instruct user: type `! gh auth login -s gist` so it runs in their terminal.
+- `tailscale (optional)` lines never block (LAN-only mesh works without it).
+
+## --fix (`airc doctor --fix`)
+
+Applies only safe auto-recovery for detected issues ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â currently stale daemon
+sockets. Identity partial states are reported with manual fix commands; doctor does
+**not** wipe identity/trust state automatically. Without `--fix`, doctor only reports.
+
+> ÃƒÂ¢Ã…Â¡Ã‚Â ÃƒÂ¯Ã‚Â¸Ã‚Â The integration test suite (`airc doctor --tests <scenario>`, plus the `--join`
+> pre-flight flag) is **not available in the rust-rewrite**. Diagnosis is the env
+> probe + `--health` + `--fix`; there is no in-CLI scenario runner.
+
+## Final report (one line)
+
+- Green: `Healthy. Fixed X, Y.`
+- Red:   `Fixed X. Still failing: <list>; next step <command>.`
+
+Be specific about what you DID, not what you found.
+
+## When to invoke
+
+- Right after install ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â confirm gh + sshd aligned before pairing.
+- After `airc update` ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â confirm new binary didn't regress.
+- When something feels wrong ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â `--health` first, env probe second, logs third.
+- Before opening an airc issue ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â paste BOTH `--health` and full env probe.

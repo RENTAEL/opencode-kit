@@ -1,0 +1,201 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Docforge Catalog (legacy reconstructed / type detail)",
+  "type": "object",
+  "required": ["version", "tiers", "profiles", "groups", "capabilities", "documents"],
+  "properties": {
+    "version": {"const": "2.28.0"},
+    "tiers": {"type": "array", "items": {"$ref": "#/definitions/namedOrder"}},
+    "profiles": {
+      "type": "object",
+      "required": ["shapes", "platforms", "frameworks", "concerns", "audiences"],
+      "properties": {
+        "shapes": {"type": "array", "items": {"$ref": "#/definitions/profile"}},
+        "platforms": {"type": "array", "items": {"$ref": "#/definitions/profile"}},
+        "frameworks": {"type": "array", "items": {"$ref": "#/definitions/profile"}},
+        "concerns": {"type": "array", "items": {"$ref": "#/definitions/profile"}},
+        "audiences": {"type": "array", "items": {"$ref": "#/definitions/profile"}}
+      },
+      "additionalProperties": false
+    },
+    "groups": {"type": "array", "items": {"type": "string"}},
+    "capabilities": {"type": "array", "items": {"enum": ["code_graph", "flow_graph", "manifests", "git_history"]}},
+    "cue_hints": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["cue", "note"],
+        "properties": {
+          "cue": {"type": "string"},
+          "examples": {"type": "array", "items": {"type": "string"}},
+          "note": {"type": "string"}
+        },
+        "additionalProperties": false
+      }
+    },
+    "documents": {"type": "array", "items": {"$ref": "#/definitions/document"}}
+  },
+  "definitions": {
+    "namedOrder": {
+      "type": "object",
+      "required": ["id", "order"],
+      "properties": {
+        "id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9-]*$"},
+        "order": {"type": "integer"}
+      },
+      "additionalProperties": false
+    },
+    "signal": {
+      "type": "object",
+      "required": ["kind"],
+      "properties": {
+        "kind": {"enum": ["path", "content", "dependency"]},
+        "pattern": {"type": "string"},
+        "contains": {"type": "string"},
+        "ecosystem": {"enum": ["npm", "composer", "pip", "cargo", "go", "gem", "maven", "gradle", "nuget", "pub"]},
+        "name": {"type": "string"},
+        "strength": {"enum": ["strong", "weak"]},
+        "weight": {"type": "number", "exclusiveMinimum": 0, "maximum": 1}
+      },
+      "additionalProperties": false,
+      "allOf": [
+        {"if": {"properties": {"kind": {"enum": ["path", "content"]}}}, "then": {"required": ["pattern"]}},
+        {"if": {"properties": {"kind": {"const": "dependency"}}}, "then": {"required": ["ecosystem", "name"]}}
+      ]
+    },
+    "profile": {
+      "type": "object",
+      "required": ["id", "order", "aliases", "signals", "query_hints"],
+      "properties": {
+        "id": {"type": "string", "pattern": "^[a-z0-9][a-z0-9-]*$"},
+        "order": {"type": "integer"},
+        "aliases": {
+          "type": "array",
+          "items": {"type": "string", "pattern": "^[a-z0-9][a-z0-9-]*$"},
+          "uniqueItems": true
+        },
+        "signals": {"type": "array", "items": {"$ref": "#/definitions/signal"}},
+        "query_hints": {"type": "array", "items": {"type": "string"}}
+      },
+      "additionalProperties": false
+    },
+    "selectors": {
+      "type": "object",
+      "properties": {
+        "shapes": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+        "platforms": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+        "frameworks": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+        "concerns": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+        "audiences": {"type": "array", "items": {"type": "string"}, "uniqueItems": true},
+        "vendors": {"type": "array", "items": {"type": "string"}, "uniqueItems": true}
+      },
+      "additionalProperties": false
+    },
+    "presentation": {
+      "type": "object",
+      "properties": {
+        "primary_audience": {"type": "string"},
+        "code": {"enum": ["contract-only", "task-focused"]},
+        "related_docs": {"enum": ["none", "compact", "traceability"]},
+        "repository_paths": {"enum": ["hidden", "actionable-only"]}
+      },
+      "additionalProperties": false
+    },
+    "document": {
+      "type": "object",
+      "required": ["id", "type", "path", "group", "selection", "summary", "contract_file", "template_file", "requires", "target_depth", "answer_shape", "write_order", "provenance_mode", "audit_profile"],
+      "properties": {
+        "id": {"type": "string"},
+        "type": {"type": "string"},
+        "title": {"type": "string", "maxLength": 80},
+        "path": {"type": "string"},
+        "group": {"type": "string"},
+        "selection": {
+          "type": "object",
+          "required": ["mode", "min_tier", "selectors", "condition"],
+          "properties": {
+            "mode": {"enum": ["static", "dynamic", "compact"]},
+            "min_tier": {"enum": ["spine", "diligence", "portfolio"]},
+            "selectors": {"$ref": "#/definitions/selectors"},
+            "condition": {"type": ["string", "null"]},
+            "requires_children": {
+              "description": "A static index whose only children are dynamic. Tier alone would select it, materializing a folder and README that can never gain a child unless discovery seeds one, so it is selected only once at least one child of its member types is. Names those member types.",
+              "type": "array",
+              "items": {"type": "string"},
+              "minItems": 1
+            }
+          },
+          "additionalProperties": false
+        },
+        "summary": {"type": "string", "maxLength": 160},
+        "contract_file": {"type": "string"},
+        "template_file": {"type": "string"},
+        "instruction_file": {"type": ["string", "null"]},
+        "requires": {"type": "array", "items": {"enum": ["code_graph", "flow_graph", "manifests", "git_history"]}},
+        "target_depth": {"enum": ["orientation", "working", "deep-dive", "reference", "router"]},
+        "answer_shape": {
+          "description": "The shape of answer this document type owes its reader: its spine and the order a reader travels it, orthogonal to target_depth (how deep) and dominant_form (which illustration carries it). Null only for a non-Markdown template output.",
+          "enum": [
+            "answer-first",
+            "ordered-narrative",
+            "executable-procedure",
+            "diagnostic-path",
+            "lookup",
+            "entry-catalog",
+            "coverage-matrix",
+            "router",
+            "merged-section-spine",
+            "fixed-frame",
+            null
+          ]
+        },
+        "write_order": {"type": "integer"},
+        "provenance_mode": {"enum": ["sections", "manifest"]},
+        "audit_profile": {"type": "string"},
+        "dominant_form": {
+          "type": ["string", "null"],
+            "enum": ["table", "flowchart", "sequenceDiagram", "stateDiagram-v2", "erDiagram", "journey", "text", null]
+        },
+        "illustration_views": {
+          "description": "Every view this document type owes, each answering a distinct reader question. The gate checks one diagram of each declared form. Count follows obligations, never document length.",
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "required": ["form", "section", "question"],
+            "properties": {
+              "form": {"enum": ["flowchart", "sequenceDiagram", "stateDiagram-v2", "erDiagram", "journey", "text"]},
+              "section": {"type": "string"},
+              "question": {"type": "string"},
+              "depth": {"enum": ["orientation", "working", "deep-dive", "reference", "router"]},
+              "required": {"type": "boolean"}
+            },
+            "additionalProperties": false
+          }
+        },
+        "schema_min": {"type": "string"},
+        "model_depth": {
+          "type": "object",
+          "properties": {
+            "c4": {"enum": ["context", "container", "component", "component-evidence"]},
+            "arc42": {"enum": ["context", "building-block-l1", "building-block-l2", "runtime-scenarios"]},
+            "stride": {"enum": ["boundary-element", "full-element", "interaction-risk"]},
+            "adr": {"enum": ["nygard", "madr-min", "madr-full"]},
+            "prov": {"enum": ["core", "expanded", "qualified"]},
+            "mermaid": {"enum": ["single-form", "complementary", "annotated"]}
+          },
+          "minProperties": 1,
+          "additionalProperties": false
+        },
+        "contract_revision": {"type": "string", "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)$"},
+        "requires_analysis": {"type": "boolean"},
+        "selection_evidence_required": {"type": "boolean"},
+        "compact_group": {"type": "string"},
+        "compact_target": {"type": "string"},
+        "compact_order": {"type": "integer"},
+        "compact_members": {"type": "array", "items": {"type": "string"}},
+        "presentation": {"$ref": "#/definitions/presentation"}
+      }
+    }
+  }
+}

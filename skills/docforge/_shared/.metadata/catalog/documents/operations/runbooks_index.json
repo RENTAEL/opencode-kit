@@ -1,0 +1,30 @@
+{
+  "id": "runbooks_index",
+  "type": "folder-index",
+  "summary": "Runbook documentation overview: what runbooks are, scope, and the reader question each runbook answers",
+  "contract_file": "content/shared/folder-index.contract.md",
+  "path": "docs/operations/runbooks/README.md",
+  "group": "operations",
+  "selection": {
+    "mode": "static",
+    "min_tier": "diligence",
+    "selectors": {},
+    "condition": null,
+    "requires_children": [
+      "runbook"
+    ]
+  },
+  "instruction_file": "content/shared/folder-index.instruction.md",
+  "requires": [],
+  "target_depth": "orientation",
+  "answer_shape": "router",
+  "write_order": 73,
+  "provenance_mode": "sections",
+  "audit_profile": "router",
+  "dominant_form": null,
+  "template_file": "content/shared/section-readme.template.md",
+  "title": "Runbooks",
+  "contract_revision": "3.0.0",
+  "compact_group": "operations_compact",
+  "compact_order": 51
+}

@@ -1,0 +1,9 @@
+id,should_trigger,prompt,expected_behavior
+trigger-01,true,"Audit this long-lived repository and establish a lightweight AGENTS.md/spec/architecture governance structure.","Inspect existing repository truth first and create only missing useful governance artifacts."
+trigger-02,true,"Start a significant change that modifies session lifecycle and persistence semantics.","Use proposal/spec/design/tasks and keep current truth unchanged until delivery."
+trigger-03,true,"Continue this multi-day refactor without losing the original constraints; several side issues appeared along the way.","Rebuild compact execution state, keep one active slice, and defer non-urgent side work."
+trigger-04,true,"The same verification failure has happened twice. Continue without repeating the same approach blindly.","Carry diagnosis forward and change the next approach before retrying."
+trigger-05,true,"Tests are green. Reconcile the feature against the spec, invariants, architecture, and acceptance criteria before calling it done.","Use verification evidence and the completion gate; do not equate green tests with completion."
+no-trigger-01,false,"Rename this local variable and run the existing unit test.","Use the normal lightweight edit/test flow without governance ceremony."
+no-trigger-02,false,"Fix this typo in a log message.","Do not create a significant-change workspace."
+no-trigger-03,false,"Explain what this Python function does.","Do not invoke project governance for a pure explanation task."

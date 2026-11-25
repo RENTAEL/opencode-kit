@@ -1,0 +1,98 @@
+# Pi CLI Notes
+
+Used by the `pi` backend adapter (`scripts/backends/pi.sh`).
+Observed in a workspace on 2026-06-16 with Pi `0.79.4`; rechecked on
+2026-06-18 with Pi `0.79.6` (`@earendil-works/pi-coding-agent`).
+
+## Adapter invocation
+
+```bash
+pi -p --tools read,grep,ls --no-extensions --no-skills \
+   --no-prompt-templates --no-themes --no-context-files --no-approve \
+   [--model M] \
+   [--continue | --session ID] [--session-id ID] [--no-session] \
+   "PROMPT"
+```
+
+`--no-session` is appended only when neither `--resume` nor `--session-id` is given (one-shot
+calls); flag order is otherwise irrelevant to Pi's parser.
+
+- `-p`/`--print` = non-interactive headless mode. The prompt is positional.
+- `--tools read,grep,ls` is the adapter's read-only boundary. Pi has no built-in plan,
+  approval, or sandbox mode, so the adapter allowlists only read-only built-in tools and excludes
+  `edit`, `write`, `bash`, and interactive tools.
+- `--no-extensions --no-skills --no-prompt-templates --no-themes --no-context-files --no-approve`
+  disables discovered extension/custom tools, skills, templates, themes, context files, and
+  project-local trust loading for the consult run.
+- `--model` accepts model patterns or full provider-prefixed ids such as
+  `anthropic/claude-...`; Pi's default provider is Google.
+- The consult `--json` option is intentionally unsupported for Pi. Pi's `--mode json` emits verbose
+  JSONL with intermediate tool/thinking events, while plain `pi -p` already filters that stream and
+  prints only the final response. Omit `--json` for normal Pi consults.
+
+## Model discovery
+
+`pi --list-models [search]` is a non-mutating diagnostic that lists configured provider models in a
+table with provider, model, context, max output, thinking support, and image support (it uses Pi's
+own config and may take a config lock, but does not read private credential files directly). On
+2026-06-18, the configured environment listed 48 models (`openai-codex`: 4, `opencode`: 44). A fresh
+empty `PI_CODING_AGENT_DIR` with common provider API env vars unset returned "No models available,"
+so the listing is a useful auth/config signal, but a one-shot consult through the wrapper
+(`scripts/consult.sh --to pi --model <id> --prompt "hi"`) is still the definitive generation probe.
+
+## Session persistence
+
+- `--resume latest` -> `--continue` (most recent session).
+- `--resume <id>` -> `--session <id>` (specific session file or partial UUID).
+- `--session-id <id>` -> `--session-id <id>` (exact project session id, created if missing).
+- One-shot calls use `--no-session` when neither `--resume` nor `--session-id` is supplied, so
+  prompt contents are not persisted in Pi's session store by default.
+- The adapter deliberately avoids Pi's `--resume`/`-r` because it opens an interactive session
+  picker, which is unsafe for headless consult runs.
+- `--resume` and `--session-id` are mutually exclusive in the adapter.
+
+## Read-only model
+
+Pi's own docs describe read-only review with a tool allowlist such as
+`pi --tools read,grep,find,ls -p "Review the code"`. The consult adapter intentionally uses
+the narrower `read,grep,ls` allowlist plus discovery-disabling flags. This removes known mutation
+paths, including shell access and discovered extension/custom tools (the `--tools` allowlist
+applies across all tool sources, so any MCP-provided tools are excluded too), but it is not an OS sandbox:
+Pi can still read any file visible to the process through `read`, `grep`, or `ls` and return its
+contents.
+
+For change reviews, Pi has no Git tool and cannot allowlist `git show` except by enabling `bash`.
+Do not add shell access for that. Follow Canonical Change Review in `SKILL.md`: the host supplies
+one canonical artifact for every backend to review.
+
+## Read scope
+
+Snapshot, not a contract — it turns on the CLI version, the agent/permission defaults, local
+config, and the host sandbox, so re-measure rather than trusting this line.
+
+On 2026-09-09 with Pi `0.85.1`, an out-of-tree absolute path was **read successfully**:
+`/tmp/consult-reach/probe.txt` returned its marker alongside the in-tree `README.md` control. This
+matches "Read-only model" above — the `read,grep,ls` allowlist restricts *which tools* run, not
+*which paths* they reach.
+
+Either way, `SKILL.md` requires callers to name only in-tree paths, so nothing in the skill's
+behavior depends on this result. Recipe: `backend-adapters.md` → "Re-measuring read scope".
+
+## Caveats
+
+- Pi has no safe `--` end-of-options delimiter, and its argument parser scans all argv for flags
+  and `@file` includes. `common.sh`'s `guard_positional_prompt` rejects `--raw` prompts beginning
+  with `-`, and Pi adds `@`, so a raw prompt cannot be interpreted as a Pi flag, session picker,
+  project-trust flag, or file include. Pi was the first backend guarded this way; Claude, Codex,
+  OpenCode and Qoder now share the same helper for the `-` case.
+- A raw single-string prompt such as `"--tools bash"` is not a read-only bypass because Pi only
+  honors `--tools` as its own argv token with a separate value.
+- Pi attempts to acquire locks under its config directory, such as `settings.json.lock` and
+  `trust.json.lock`, even for basic commands. It needs a writable Pi config directory and can fail
+  before running in strict read-only sandboxes. In OpenAI Codex, run the wrapper with escalated
+  execution as described in `references/codex-permissions.md`.
+- The binary name is short. If an unrelated `pi` binary appears earlier on `PATH`, `--list` may
+  report it as installed but runs will fail confusingly. Confirm `command -v pi` resolves to
+  `@earendil-works/pi-coding-agent` when troubleshooting.
+- Pi uses provider API keys from env by default (`--api-key` defaults to provider env vars).
+  "Installed" only means the CLI is on `PATH`; it does not mean Pi is authenticated.

@@ -1,0 +1,15 @@
+{
+  "name": "openvision",
+  "version": "1.0.0",
+  "description": "Multimodal vision for OpenCode — analyze screenshots, generate images, OCR, design comparison, and visual workflows",
+  "type": "module",
+  "scripts": {
+    "generate": "node generate-image.mjs",
+    "describe": "node describe-image.mjs"
+  },
+  "keywords": ["opencode", "opencode-skill", "multimodal", "vision", "flux", "paligemma", "nvidia", "image-generation", "ocr", "ai"],
+  "license": "MIT",
+  "dependencies": {
+    "dotenv": "^17.4.2"
+  }
+}

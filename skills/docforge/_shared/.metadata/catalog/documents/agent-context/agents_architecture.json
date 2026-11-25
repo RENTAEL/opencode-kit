@@ -1,0 +1,37 @@
+{
+  "id": "agents_architecture",
+  "type": "agents-architecture",
+  "summary": "Self-contained component map with durable source paths, entry points, dependency direction, and boundaries",
+  "contract_file": "content/agent-context/contracts/agents-architecture.md",
+  "path": "docs/agents/architecture.md",
+  "group": "agent-context",
+  "selection": {
+    "mode": "static",
+    "min_tier": "spine",
+    "selectors": {
+      "audiences": [
+        "coding-agents"
+      ]
+      ,
+      "vendors": []
+    },
+    "condition": null
+  },
+  "instruction_file": "content/agent-context/agents-kernel.instruction.md",
+  "requires": [
+    "code_graph"
+  ],
+  "target_depth": "deep-dive",
+  "answer_shape": "lookup",
+  "write_order": 205,
+  "provenance_mode": "sections",
+  "audit_profile": "agent-view",
+  "dominant_form": null,
+  "contract_revision": "3.0.0",
+  "presentation": {
+    "related_docs": "none"
+  },
+  "template_file": "content/agent-context/templates/agents-architecture.md",
+  "compact_group": "agents_compact",
+  "compact_order": 1
+}

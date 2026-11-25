@@ -1,0 +1,438 @@
+@import 'tailwindcss';
+@import 'fumadocs-ui/css/generated/glass.css';
+@import 'fumadocs-ui/css/neutral.css';
+@import 'fumadocs-ui/css/preset.css';
+
+/* Docforge "liquid docs" theme — a Liquid Glass / Aero-inspired adaptation of
+   the Fumadocs Glass layout. Neutral gray darks keep the reading canvas
+   quiet and true-black in dark mode (no blue cast); Docforge red is reserved
+   for active and primary states. Glass is applied to the floating navigation
+   layer (sidebar, header controls, mobile drawer, compact TOC) only — prose,
+   tables, and code stay stable and high-contrast, per the Liquid Glass
+   navigation-layer rule. */
+@theme {
+  --font-sans: "Avenir Next", "Century Gothic", "Futura", "Helvetica Neue",
+    Helvetica, Arial, sans-serif;
+
+  --radius-sm: 0.375rem;
+  --radius-md: 0.625rem;
+  --radius-lg: 0.875rem;
+  --radius-xl: 1.125rem;
+  --radius-2xl: 1.5rem;
+  --radius-3xl: 2rem;
+
+  --color-fd-background: #ffffff;
+  --color-fd-foreground: #0f1419;
+  --color-fd-muted: #e7ecf2;
+  --color-fd-muted-foreground: #5b6775;
+  --color-fd-popover: #ffffff;
+  --color-fd-popover-foreground: #0f1419;
+  --color-fd-card: #ffffff;
+  --color-fd-card-foreground: #0f1419;
+  --color-fd-border: hsla(217, 22%, 35%, 0.16);
+  --color-fd-primary: #e30613;
+  --color-fd-primary-foreground: #ffffff;
+  --color-fd-secondary: #e7ecf2;
+  --color-fd-secondary-foreground: #0f1419;
+  --color-fd-accent: hsla(217, 25%, 45%, 0.1);
+  --color-fd-accent-foreground: #0f1419;
+  --color-fd-ring: #e30613;
+  --color-fd-overlay: hsla(222, 30%, 8%, 0.45);
+
+  /* Liquid Glass material. The layered gradients provide the directional
+     rim and specular response that a flat translucent fill cannot. Light
+     mode values favor legibility: a stronger fill, visible edges, and a
+     soft drop shadow so panels read against the white canvas. */
+  --glass-fill: hsla(210, 32%, 97%, 0.72);
+  --glass-fill-strong: hsla(210, 30%, 98%, 0.88);
+  --glass-fill-hover: hsla(215, 35%, 94%, 0.92);
+  --glass-border-edge: hsla(215, 25%, 40%, 0.34);
+  --glass-border-bright: hsla(0, 0%, 100%, 0.9);
+  --glass-specular:
+    linear-gradient(135deg, hsla(0, 0%, 100%, 0.7) 0%, hsla(0, 0%, 100%, 0.14) 28%, transparent 48%),
+    linear-gradient(315deg, hsla(202, 72%, 78%, 0.12), transparent 42%);
+  --glass-highlight:
+    inset 0 1px 0 var(--glass-border-bright),
+    inset 1px 0 0 hsla(0, 0%, 100%, 0.34),
+    inset 0 -1px 0 hsla(218, 28%, 24%, 0.08);
+  --glass-blur: blur(28px) saturate(185%) contrast(106%);
+  --glass-shadow:
+    0 24px 54px -24px hsla(220, 38%, 18%, 0.42),
+    0 8px 20px -14px hsla(220, 38%, 18%, 0.32),
+    0 1px 2px hsla(220, 38%, 18%, 0.16);
+  --glass-control-shadow:
+    inset 0 1px 0 var(--glass-border-bright),
+    inset 0 -1px 0 hsla(218, 28%, 24%, 0.08),
+    0 8px 22px -12px hsla(220, 38%, 18%, 0.46);
+  --glass-caustic: hsla(0, 0%, 100%, 0.5);
+  --glass-chroma: hsla(199, 92%, 66%, 0.18);
+}
+
+.dark {
+  --color-fd-background: #0a0a0c;
+  --color-fd-foreground: #e9e9ec;
+  --color-fd-muted: #131316;
+  --color-fd-muted-foreground: hsla(0, 0%, 74%, 0.82);
+  --color-fd-popover: #121214;
+  --color-fd-popover-foreground: #e9e9ec;
+  --color-fd-card: #131316;
+  --color-fd-card-foreground: #e9e9ec;
+  --color-fd-border: hsla(0, 0%, 92%, 0.13);
+  --color-fd-primary: #ff5c5c;
+  --color-fd-primary-foreground: #0a0a0c;
+  --color-fd-secondary: #1b1b1f;
+  --color-fd-secondary-foreground: #e9e9ec;
+  --color-fd-accent: hsla(0, 0%, 70%, 0.1);
+  --color-fd-accent-foreground: #e9e9ec;
+  --color-fd-ring: #ff5c5c;
+  --color-fd-overlay: hsla(0, 0%, 2%, 0.65);
+
+  --glass-fill: hsla(240, 8%, 8%, 0.58);
+  --glass-fill-strong: hsla(240, 8%, 9%, 0.76);
+  --glass-fill-hover: hsla(240, 7%, 15%, 0.78);
+  --glass-border-edge: hsla(0, 0%, 100%, 0.14);
+  --glass-border-bright: hsla(0, 0%, 100%, 0.2);
+  --glass-specular:
+    linear-gradient(135deg, hsla(0, 0%, 100%, 0.13) 0%, hsla(0, 0%, 100%, 0.025) 30%, transparent 48%),
+    linear-gradient(315deg, hsla(0, 70%, 56%, 0.045), transparent 42%);
+  --glass-highlight:
+    inset 0 1px 0 var(--glass-border-bright),
+    inset 1px 0 0 hsla(0, 0%, 100%, 0.07),
+    inset 0 -1px 0 hsla(0, 0%, 0%, 0.34);
+  --glass-blur: blur(30px) saturate(165%) contrast(112%);
+  --glass-shadow:
+    0 28px 64px -24px hsla(0, 0%, 0%, 0.92),
+    0 10px 24px -16px hsla(0, 0%, 0%, 0.88),
+    0 1px 2px hsla(0, 0%, 0%, 0.72);
+  --glass-control-shadow:
+    inset 0 1px 0 var(--glass-border-bright),
+    inset 0 -1px 0 hsla(0, 0%, 0%, 0.42),
+    0 10px 26px -14px hsla(0, 0%, 0%, 0.94);
+  --glass-caustic: hsla(0, 0%, 100%, 0.18);
+  --glass-chroma: hsla(346, 90%, 66%, 0.14);
+}
+
+html {
+  scrollbar-gutter: stable;
+  zoom: 1.05;
+  background-color: var(--color-fd-background);
+}
+
+body {
+  background-color: var(--color-fd-background);
+}
+
+body,
+#fd-glass-layout {
+  transition: background-color 300ms ease, color 300ms ease;
+}
+
+/* Numbers align on the grid: tabular figures in tables (ADRs, runbooks,
+   status matrices). */
+.prose table {
+  font-variant-numeric: tabular-nums;
+}
+
+html > body[data-scroll-locked] {
+  margin-right: 0px !important;
+  --removed-body-scroll-bar-size: 0px !important;
+}
+
+/* Plain code fences (not shiki-highlighted, e.g. indented blocks or unknown
+   languages) have no line spans to carry horizontal padding, so they would
+   stick to the right edge of the code block when lines overflow. Give them
+   the same inset the highlighted blocks get. */
+.prose pre:not(.shiki):not(.not-fumadocs-codeblock *) {
+  padding-inline: calc(var(--spacing) * 4);
+}
+
+/* Ambient environment — cool, low-saturation light behind the glass so the
+   floating panels have real pixels to blur. Purely decorative; disabled for
+   reduced transparency, forced colors, and print. */
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background:
+    radial-gradient(64rem 44rem at 4% -8%, hsla(195, 82%, 58%, 0.28), transparent 62%),
+    radial-gradient(52rem 38rem at 98% 2%, hsla(274, 70%, 70%, 0.2), transparent 62%),
+    radial-gradient(56rem 40rem at 72% 108%, hsla(350, 76%, 68%, 0.16), transparent 62%),
+    linear-gradient(115deg, transparent 38%, hsla(210, 60%, 92%, 0.4) 50%, transparent 62%);
+}
+
+.dark body::before {
+  background:
+    radial-gradient(64rem 44rem at 4% -8%, hsla(198, 68%, 46%, 0.11), transparent 62%),
+    radial-gradient(52rem 38rem at 98% 2%, hsla(278, 50%, 56%, 0.075), transparent 62%),
+    radial-gradient(56rem 40rem at 72% 108%, hsla(355, 72%, 50%, 0.065), transparent 62%),
+    linear-gradient(115deg, transparent 38%, hsla(0, 0%, 100%, 0.025) 50%, transparent 62%);
+}
+
+/* Floating navigation layer — glass only here, never on content. */
+#nd-sidebar {
+  border-radius: var(--radius-2xl);
+  border-color: var(--glass-border-edge);
+  background-color: var(--glass-fill);
+  background-image: var(--glass-specular);
+  box-shadow: var(--glass-highlight), var(--glass-shadow);
+}
+
+/* The DOM layer carries the whole material: no WebGL, no framebuffer. */
+[data-liquid-glass] {
+  --glass-pointer-x: 50%;
+  --glass-pointer-y: 50%;
+  --glass-tilt-x: 0deg;
+  --glass-tilt-y: 0deg;
+}
+
+/* Sidebar navigation items — the active page is a frosted glass pill with a
+   clear accent tint and a red edge; every item picks up a distinct glass
+   hover state. Applies to the desktop sidebar and the mobile drawer.
+   The sheen stays soft: the shared specular's bright diagonal white washes
+   out the pill's rounded corners, so the pill gets its own faint gradient. */
+#nd-sidebar a.rounded-lg,
+#fd-glass-layout .inset-e-0 a.rounded-lg {
+  margin: 1px;
+}
+
+#nd-sidebar a.rounded-lg.bg-fd-primary\/10,
+#fd-glass-layout .inset-e-0 a.rounded-lg.bg-fd-primary\/10 {
+  background-color: color-mix(in oklab, var(--color-fd-primary) 22%, var(--glass-fill-hover));
+  background-image: linear-gradient(135deg, hsla(0, 0%, 100%, 0.16), transparent 45%);
+  box-shadow:
+    inset 0 1px 0 hsla(0, 0%, 100%, 0.3),
+    0 0 0 1px color-mix(in oklab, var(--color-fd-primary) 60%, transparent);
+  color: var(--color-fd-primary);
+  font-weight: 500;
+}
+
+#nd-sidebar a.rounded-lg:not(.bg-fd-primary\/10):hover,
+#fd-glass-layout .inset-e-0 a.rounded-lg:not(.bg-fd-primary\/10):hover {
+  background-color: color-mix(in oklab, var(--color-fd-foreground) 9%, var(--glass-fill-hover));
+  box-shadow:
+    inset 0 1px 0 hsla(0, 0%, 100%, 0.4),
+    0 0 0 1px var(--glass-border-edge);
+  color: var(--color-fd-foreground);
+}
+
+#fd-glass-layout > div.sticky {
+  background-image: linear-gradient(to bottom, var(--glass-fill-strong), transparent);
+}
+
+@media (max-width: 47.98rem) {
+  #fd-glass-layout > div.sticky {
+    background-image: linear-gradient(to top, var(--glass-fill-strong), transparent);
+  }
+}
+
+#fd-glass-layout button.rounded-full {
+  border-color: var(--glass-border-edge);
+  background-color: var(--glass-fill);
+  background-image: var(--glass-specular);
+  box-shadow: var(--glass-control-shadow);
+  transition:
+    background-color 180ms ease,
+    background-position 220ms cubic-bezier(0.2, 0.8, 0.2, 1),
+    border-color 180ms ease,
+    box-shadow 180ms ease,
+    transform 220ms cubic-bezier(0.2, 0.8, 0.2, 1);
+  transform: perspective(700px) rotateX(var(--glass-tilt-x)) rotateY(var(--glass-tilt-y));
+  transform-origin: center;
+  will-change: background-position, transform;
+}
+
+#fd-glass-layout button.rounded-full:hover {
+  border-color: var(--glass-border-bright);
+  background-color: var(--glass-fill-hover);
+  box-shadow: var(--glass-control-shadow), 0 12px 28px -16px currentColor;
+  transform: perspective(700px) rotateX(var(--glass-tilt-x)) rotateY(var(--glass-tilt-y)) translateY(-1px);
+}
+
+#fd-glass-layout button.rounded-full:active {
+  box-shadow: var(--glass-highlight);
+  transform: perspective(700px) rotateX(var(--glass-tilt-x)) rotateY(var(--glass-tilt-y)) scale(0.97);
+}
+
+/* A focused caustic and a restrained cyan/red edge split mimic refraction at
+   the pointer location without placing a second glass surface over content. */
+#fd-glass-layout button.rounded-full[data-liquid-glass-active],
+#nd-toc[data-liquid-glass-active],
+#nd-sidebar[data-liquid-glass-active],
+#fd-glass-layout .inset-e-0[data-liquid-glass-active] {
+  background-image:
+    radial-gradient(circle 80px at var(--glass-pointer-x) var(--glass-pointer-y), var(--glass-caustic), transparent 66%),
+    radial-gradient(circle 120px at calc(var(--glass-pointer-x) + 9%) calc(var(--glass-pointer-y) + 7%), var(--glass-chroma), transparent 72%),
+    var(--glass-specular);
+}
+
+#fd-glass-layout button.rounded-full:focus-visible {
+  outline: 2px solid var(--color-fd-ring);
+  outline-offset: 3px;
+}
+
+/* Mobile sidebar drawer keeps the page context visible through a blur. */
+#fd-glass-layout .inset-e-0 {
+  border-left-color: var(--glass-border-edge);
+  background-color: var(--glass-fill-strong);
+  background-image: var(--glass-specular);
+  box-shadow: var(--glass-highlight), var(--glass-shadow);
+}
+
+/* Inner drawer bars belong to the same glass sheet, so they use transparent
+   edge fades rather than stacking a second blurred material. */
+#fd-glass-layout .inset-e-0 > div > div.sticky {
+  background-color: transparent;
+  box-shadow: none;
+}
+
+#fd-glass-layout .inset-e-0 > div > div:first-child {
+  background-image: linear-gradient(to bottom, var(--glass-fill-strong), transparent);
+}
+
+#fd-glass-layout .inset-e-0 > div > div:last-child {
+  background-image: linear-gradient(to top, var(--glass-fill-strong), transparent);
+}
+
+/* Compact TOC popover (below the xl breakpoint). */
+@media (max-width: 79.98rem) {
+  #nd-toc {
+    border-color: var(--glass-border-edge);
+    background-color: var(--glass-fill-strong);
+    background-image: var(--glass-specular);
+    box-shadow: var(--glass-highlight), var(--glass-shadow);
+  }
+}
+
+@supports ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  #nd-sidebar,
+  #fd-glass-layout button.rounded-full,
+  #fd-glass-layout .inset-e-0 {
+    -webkit-backdrop-filter: var(--glass-blur);
+    backdrop-filter: var(--glass-blur);
+  }
+
+  @media (max-width: 79.98rem) {
+    #nd-toc {
+      -webkit-backdrop-filter: var(--glass-blur);
+      backdrop-filter: var(--glass-blur);
+    }
+  }
+}
+
+/* No backdrop support: fall back to opaque panels — legibility first. */
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  body::before {
+    display: none;
+  }
+
+  #nd-sidebar,
+  #fd-glass-layout button.rounded-full,
+  #fd-glass-layout .inset-e-0 {
+    background-color: var(--color-fd-popover);
+  }
+
+  @media (max-width: 79.98rem) {
+    #nd-toc {
+      background-color: var(--color-fd-popover);
+    }
+  }
+}
+
+/* Content layer — rounded and bounded, but deliberately not glass. */
+.prose img {
+  border-radius: var(--radius-lg);
+}
+
+.prose pre {
+  border-radius: var(--radius-lg);
+}
+
+.prose table {
+  border-radius: var(--radius-md);
+  overflow: clip;
+}
+
+/* Selection echoes the accent without shouting. */
+::selection {
+  background: color-mix(in oklab, var(--color-fd-primary) 22%, transparent);
+}
+
+/* Accessibility — the Liquid Glass system adjustments, in CSS. */
+@media (prefers-reduced-transparency: reduce) {
+  body::before {
+    display: none;
+  }
+
+  #nd-sidebar,
+  #fd-glass-layout > div.sticky,
+  #fd-glass-layout button.rounded-full,
+  #fd-glass-layout .inset-e-0 {
+    background-color: var(--color-fd-popover);
+    background-image: none;
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+
+  @media (max-width: 79.98rem) {
+    #nd-toc {
+      background-color: var(--color-fd-popover);
+      -webkit-backdrop-filter: none;
+      backdrop-filter: none;
+    }
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+@media (forced-colors: active) {
+  body::before {
+    display: none;
+  }
+
+  #nd-sidebar,
+  #fd-glass-layout > div.sticky,
+  #fd-glass-layout button.rounded-full,
+  #fd-glass-layout .inset-e-0 {
+    background-color: Canvas;
+    background-image: none;
+    border-color: CanvasText;
+    box-shadow: none;
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+}
+
+@media print {
+  body::before {
+    display: none;
+  }
+
+  #fd-glass-layout {
+    display: block;
+  }
+
+  #nd-sidebar,
+  #nd-toc,
+  #fd-glass-layout > div.sticky {
+    display: none;
+  }
+
+  *,
+  *::before,
+  *::after {
+    box-shadow: none !important;
+    -webkit-backdrop-filter: none !important;
+    backdrop-filter: none !important;
+  }
+}

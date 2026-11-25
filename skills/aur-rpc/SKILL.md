@@ -1,0 +1,161 @@
+---
+name: aur-rpc
+description: "Interact with the [Aurweb RPC interface](https://wiki.archlinux.org/title/Aurweb_RPC_interface) ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â the lightweight JSON HTTP API that powers `yay`, `paru`, the AUR web search, and most third-party tooling."
+---
+# Skill: aur-rpc
+
+## Purpose
+
+Interact with the [Aurweb RPC interface](https://wiki.archlinux.org/title/Aurweb_RPC_interface) ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â the lightweight JSON HTTP API that powers `yay`, `paru`, the AUR web search, and most third-party tooling.
+
+**Base URL:** `https://aur.archlinux.org/rpc/v5/`
+
+## Query Types
+
+Two endpoint shapes:
+
+### Search
+
+```
+GET /rpc/v5/search/<keyword>?by=<field>
+```
+
+| `by` field | Meaning |
+|------------|---------|
+| `name-desc` *(default)* | Match against `Name` and `Description` |
+| `name` | Match against `Name` only |
+| `maintainer` | Match against `Maintainer` (empty `arg=` ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ orphan list) |
+| `comaintainers` | Match against comaintainer usernames |
+| `depends` | Packages whose `Depends` contains the keyword |
+| `makedepends` | Packages whose `MakeDepends` contains the keyword |
+| `optdepends` | Packages whose `OptDepends` contains the keyword |
+| `checkdepends` | Packages whose `CheckDepends` contains the keyword |
+| `provides` | Packages whose `Provides` contains the keyword |
+| `conflicts` | Packages whose `Conflicts` contains the keyword |
+| `replaces` | Packages whose `Replaces` contains the keyword |
+| `groups` | Match against `Groups` |
+| `submitter` | Match against the submitter username |
+
+### Info
+
+```
+GET /rpc/v5/info?arg[]=<pkg1>&arg[]=<pkg2>&...
+```
+
+URL-encode the brackets as `%5B%5D` when calling by hand.
+
+## Response Envelope
+
+Every response is JSON with the same shape:
+
+```json
+{
+  "version": 5,
+  "type": "search" | "multiinfo" | "error",
+  "resultcount": 0,
+  "results": [...]
+}
+```
+
+`type: "error"` includes an additional `"error": "..."` string. Errors still return HTTP 200 ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â check `type`, not the status code.
+
+## Fields
+
+### Always returned (`search` and `multiinfo`)
+
+| Field | Type | Meaning |
+|-------|------|---------|
+| `ID` | int | Per-package ID |
+| `Name` | str | Package name (within its base) |
+| `PackageBaseID` | int | Base ID |
+| `PackageBase` | str | Base name (used in URLs, git clones, requests) |
+| `Version` | str | Current `pkgver-pkgrel` |
+| `Description` | str | `pkgdesc` |
+| `URL` | str | Upstream URL |
+| `NumVotes` | int | Vote count |
+| `Popularity` | float | Popularity score |
+| `OutOfDate` | int \| null | Unix timestamp if flagged out-of-date, else `null` |
+| `Maintainer` | str \| null | `null` if orphaned |
+| `FirstSubmitted` | int | Unix timestamp |
+| `LastModified` | int | Unix timestamp |
+| `URLPath` | str | Snapshot URL fragment: `/cgit/aur.git/snapshot/<pkgbase>.tar.gz` |
+
+### `multiinfo` only
+
+| Field | Type |
+|-------|------|
+| `Depends` | string[] |
+| `MakeDepends` | string[] |
+| `OptDepends` | string[] |
+| `CheckDepends` | string[] |
+| `Conflicts` | string[] |
+| `Provides` | string[] |
+| `Replaces` | string[] |
+| `Groups` | string[] |
+| `License` | string[] |
+| `Keywords` | string[] |
+
+Fields a package doesn't have are **omitted** (not present as `null`).
+
+## JSONP
+
+Append `?callback=<name>` to wrap the response in a JS function call. Useful from browser-side code only.
+
+## Limits
+
+- HTTP GET URI: max **8190 bytes** (nginx with HTTP/2 enforces **4443 bytes**)
+- Search keyword: min **2 characters**
+- Search with **ÃƒÂ¢Ã¢â‚¬Â°Ã‚Â¥5000 hits** fails with `"error": "Too many package results."` (no partial results)
+- Rate limit: **4000 requests/day per IP**
+- `info` with >200 packages needs to be split
+
+## Metadata Archives (Bulk)
+
+For repeated bulk queries, prefer the gzipped metadata archives ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â much friendlier to the AUR than thousands of RPC calls. All live at `https://aur.archlinux.org/<archive>.gz`, refreshed ~every 5 minutes.
+
+| Archive | Format |
+|---------|--------|
+| `packages.gz` | One package name per line |
+| `pkgbase.gz` | One package base per line |
+| `users.gz` | One username per line |
+| `packages-meta-v1.json.gz` | Full `type=search` JSON for every package |
+| `packages-meta-ext-v1.json.gz` | Full `type=multiinfo` JSON (with all relation fields) |
+
+Supports `Last-Modified` and `ETag` ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â use them for incremental updates.
+
+## Examples
+
+```bash
+# Search for packages matching "neovim"
+curl 'https://aur.archlinux.org/rpc/v5/search/neovim'
+
+# Info for multiple packages (URL-encoded brackets)
+curl 'https://aur.archlinux.org/rpc/v5/info?arg%5B%5D=yay&arg%5B%5D=paru'
+
+# Orphan packages (empty maintainer). Path /search/ with no keyword 404s ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â
+# use query-string arg= instead. Orphans exceed 5000, so this returns
+# {"type":"error","error":"Too many package results.",...} ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â expected.
+curl 'https://aur.archlinux.org/rpc/v5/search?by=maintainer&arg='
+
+# Out-of-date orphans ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â filter the metadata archive instead
+curl -sL https://aur.archlinux.org/packages-meta-v1.json.gz | gzip -dc \
+  | jq '.[] | select(.Maintainer == null and .OutOfDate != null) | {Name, OutOfDate, Version}'
+
+# Bulk fetch ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â use the metadata archive once per refresh
+curl -O https://aur.archlinux.org/packages-meta-ext-v1.json.gz
+```
+
+## Reference Implementation
+
+The Arch Wiki links to canonical Python clients. For new helpers, prefer:
+
+- Batch with the metadata archive, then fall back to RPC for individual package deltas
+- Cache aggressively (ETag / `Last-Modified`)
+- Respect the 4000/day rate limit ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â back off on HTTP 429
+
+## Related
+
+- `aur-helpers` ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â clients built on top of this API
+- `aur-audit` ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â uses RPC to verify `OutOfDate`, popularity, votes before flagging
+- `aur-submission` ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â `URLPath` is the snapshot download link for non-git clients
+- Full spec: https://wiki.archlinux.org/title/Aurweb_RPC_interface

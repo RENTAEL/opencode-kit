@@ -1,0 +1,16 @@
+.DS_Store
+*.swp
+*.swo
+*~
+
+# code-forge runtime
+.code-forge/
+.worktrees/
+worktrees/
+
+# diagnostics output
+skills/*/evals/
+
+# python script layer
+__pycache__/
+*.py[cod]

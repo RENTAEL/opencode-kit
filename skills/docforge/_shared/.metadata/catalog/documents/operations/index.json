@@ -1,0 +1,74 @@
+{
+  "$schema": "../../category-index-schema.json",
+  "version": "2.28.0",
+  "category": "operations",
+  "purpose": "Deployment, observability, and operational runbooks.",
+  "source": "../../index.json",
+  "records": [
+    {
+      "id": "operations_compact",
+      "path": "operations_compact.json",
+      "summary": "Compact operations section: deployment and observability in one file"
+    },
+    {
+      "id": "operations_index",
+      "path": "operations_index.json",
+      "summary": "Operations documentation overview: what this section covers and the reader question each operations document answers"
+    },
+    {
+      "id": "deployment",
+      "path": "deployment.json",
+      "summary": "Environments, artifact path, rollout, rollback, verification"
+    },
+    {
+      "id": "distribution",
+      "path": "distribution.json",
+      "summary": "Artifact, build, signing, packaging, channels, verification, update/rollback"
+    },
+    {
+      "id": "flashing_recovery",
+      "path": "flashing_recovery.json",
+      "summary": "Prerequisites, artifact, connection, flashing, verification, rollback/recovery, safety"
+    },
+    {
+      "id": "network_deployment",
+      "path": "network_deployment.json",
+      "summary": "Network configuration, keys/roles, deployment order, verification, upgrade/rollback"
+    },
+    {
+      "id": "observability",
+      "path": "observability.json",
+      "summary": "Signals, ownership, correlation, alert intent, blind spots"
+    },
+    {
+      "id": "worker_reliability",
+      "path": "worker_reliability.json",
+      "summary": "Retry, idempotency, timeout, backpressure, dead-letter, replay, observability"
+    },
+    {
+      "id": "infra_apply",
+      "path": "infra_apply.json",
+      "summary": "Plan/apply safety, external state, locking, ownership, resource inventory, drift, recovery"
+    },
+    {
+      "id": "runbooks_index",
+      "path": "runbooks_index.json",
+      "summary": "Runbook documentation overview: what runbooks are, scope, and the reader question each runbook answers"
+    },
+    {
+      "id": "infra_disaster_recovery",
+      "path": "infra_disaster_recovery.json",
+      "summary": "Failure scenarios, recovery order, verification, data-loss boundary"
+    },
+    {
+      "id": "infra_state",
+      "path": "infra_state.json",
+      "summary": "Plan/apply safety, external state, locking, ownership, resource inventory, drift, recovery"
+    },
+    {
+      "id": "runbook",
+      "path": "runbook.json",
+      "summary": "Symptom, safety, diagnosis, remediation, verification, escalation"
+    }
+  ]
+}

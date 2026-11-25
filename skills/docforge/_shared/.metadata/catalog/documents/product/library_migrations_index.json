@@ -1,0 +1,34 @@
+{
+  "id": "library_migrations_index",
+  "type": "folder-index",
+  "summary": "Migration documentation overview: what migrations are, scope, and the reader question each migration document answers",
+  "contract_file": "content/shared/folder-index.contract.md",
+  "path": "docs/product/migrations/README.md",
+  "group": "product",
+  "selection": {
+    "mode": "static",
+    "min_tier": "spine",
+    "selectors": {
+      "shapes": [
+        "library-sdk"
+      ]
+    },
+    "condition": null,
+    "requires_children": [
+      "migration"
+    ]
+  },
+  "instruction_file": "content/shared/folder-index.instruction.md",
+  "requires": [],
+  "target_depth": "orientation",
+  "answer_shape": "router",
+  "write_order": 42,
+  "provenance_mode": "sections",
+  "audit_profile": "router",
+  "dominant_form": null,
+  "template_file": "content/shared/section-readme.template.md",
+  "title": "Migrations",
+  "contract_revision": "3.0.0",
+  "compact_group": "product_compact",
+  "compact_order": 51
+}
